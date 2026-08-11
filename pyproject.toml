@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codeanalyzer"
+version = "0.1.0"
+description = "Codebase Correctness Analysis System — program-evidence integration and reasoning engine"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Codeanalyzer Contributors" }]
+keywords = [
+  "static-analysis",
+  "correctness",
+  "program-analysis",
+  "evidence",
+  "llm",
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = [
+  "pydantic>=2.0",
+  "typing-extensions>=4.8",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+[project.scripts]
+codeanalyzer = "codeanalyzer.cli:main"
+
+[project.urls]
+Documentation = "https://github.com/example/codeanalyzer"
+Repository = "https://github.com/example/codeanalyzer"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codeanalyzer"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/codeanalyzer", "tests", "docs", "README.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["codeanalyzer"]
+mypy_path = "src"

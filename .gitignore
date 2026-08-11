@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# Tooling
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Analysis store (project-local; keep structure docs only)
+.codeanalyzer/analysis.db
+.codeanalyzer/graphs/*
+.codeanalyzer/snapshots/*
+.codeanalyzer/cache/*
+!.codeanalyzer/.gitkeep
+!.codeanalyzer/**/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.venv/
