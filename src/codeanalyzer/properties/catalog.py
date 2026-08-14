@@ -31,6 +31,7 @@ REQUIRED_FIELD_REACHES_CONSUMER = CorrectnessProperty(
         source="docs/orders.md",
     ),
     detector_ids=["missing_field_propagation", "value_fails_to_reach_consumer"],
+    scope_entity_ids=["Order.customerId", "OrderRepository.save"],
 )
 
 RESOURCE_MUST_BE_RELEASED = CorrectnessProperty(

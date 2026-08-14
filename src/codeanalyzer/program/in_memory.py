@@ -20,11 +20,13 @@ class InMemoryProgramModel(ProgramModel):
         entities: list[Entity] | None = None,
         relationships: list[Relationship] | None = None,
         call_graph: CallGraph | None = None,
+        data_flow: DataFlowGraph | None = None,
     ) -> None:
         self._snapshot = snapshot
         self._entities = {entity.id: entity for entity in (entities or [])}
         self._relationships = list(relationships or [])
         self._call_graph = call_graph or CallGraph()
+        self._data_flow = data_flow or DataFlowGraph()
         self._cfgs: dict[str, ControlFlowGraph] = {}
 
     @property
@@ -44,7 +46,8 @@ class InMemoryProgramModel(ProgramModel):
         return self._cfgs.get(function_id)
 
     def data_flow(self) -> DataFlowGraph:
-        return DataFlowGraph()
+        return self._data_flow
 
     def get_entity(self, entity_id: str) -> Entity | None:
         return self._entities.get(entity_id)
+

@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
-from codeanalyzer.analysis.stub import StubAnalysisSubstrate
+from codeanalyzer.analysis.program_model import ProgramModelAnalysisSubstrate
 from codeanalyzer.analyzers.adapters import (
     ESLintAdapter,
     FlutterAnalyzeAdapter,
@@ -23,7 +23,7 @@ from codeanalyzer.analyzers.adapters import (
 from codeanalyzer.analyzers.registry import AnalyzerRegistry
 from codeanalyzer.config.settings import Settings
 from codeanalyzer.detectors.base import DetectorContext, DetectorRegistry
-from codeanalyzer.detectors.stubs import build_stub_detectors
+from codeanalyzer.detectors.registry import build_detectors
 from codeanalyzer.documentation.stub import StubDocumentationAPI
 from codeanalyzer.domain.diagnostics import ExternalDiagnostic
 from codeanalyzer.domain.evidence import MinimalEvidenceSlice, RefinementResult
@@ -31,14 +31,14 @@ from codeanalyzer.domain.findings import Finding
 from codeanalyzer.domain.properties import CorrectnessProperty
 from codeanalyzer.domain.slices import LogicalSlice
 from codeanalyzer.domain.snapshots import AnalysisRun, AnalysisStatus, Project, Snapshot
+from codeanalyzer.evidence.program_model import ProgramModelEvidenceAPI
 from codeanalyzer.evidence.refiner import StubEvidenceRefiner
-from codeanalyzer.evidence.stub import StubEvidenceAPI
 from codeanalyzer.llm.judgment import JudgmentResult, StubSemanticJudge
 from codeanalyzer.persistence.paths import AnalysisPaths
 from codeanalyzer.persistence.stores import Stores
+from codeanalyzer.program.builder import ProgramModelBuilder, empty_program_model_builder
 from codeanalyzer.properties.stub import StubPropertyAPI
 from codeanalyzer.repository.manager import RepositoryManager
-from codeanalyzer.scope.api import SeedSpecification
 from codeanalyzer.scope.resolver import ScopeResolutionPipeline
 
 
@@ -62,9 +62,14 @@ class AnalysisOrchestrator:
         self,
         settings: Settings | None = None,
         stores: Stores | None = None,
+        program_model_builder: ProgramModelBuilder | None = None,
     ) -> None:
         self.settings = settings or Settings()
         self.stores = stores
+        self._program_model_builder: ProgramModelBuilder = (
+            program_model_builder or empty_program_model_builder
+        )
+
         self.repo = RepositoryManager(stores=stores)
         self.scope = ScopeResolutionPipeline(
             slice_store=stores.slices if stores is not None else None
@@ -79,28 +84,26 @@ class AnalysisOrchestrator:
             self.analyzers.register(adapter_cls())
 
         self.detectors = DetectorRegistry()
-        for detector in build_stub_detectors():
+        for detector in build_detectors():
             self.detectors.register(detector)
 
-        self.evidence_api = StubEvidenceAPI()
         self.documentation_api = StubDocumentationAPI()
         self.property_api = StubPropertyAPI()
-        self.substrate = StubAnalysisSubstrate()
-        self.refiner = StubEvidenceRefiner(
-            self.evidence_api,
-            self.documentation_api,
-            self.substrate,
-            max_items=self.settings.max_evidence_items,
-        )
         self.judge = StubSemanticJudge()
 
-    def init_project(self, path: str, name: str | None = None) -> tuple[Project, Snapshot]:
-        self._ensure_stores(path)
-        project = self.repo.register_project(path, name=name)
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def init_project(self, project_path: str) -> tuple[Project, Snapshot]:
+        """Ensure persistence is initialised and return project + snapshot."""
+        self._ensure_stores(project_path)
+        assert self.stores is not None
+        project = self.repo.register_project(project_path)
         snapshot = self.repo.create_snapshot(project)
         return project, snapshot
 
-    def resolve_and_approve_slice(
+    def resolve_slice(
         self,
         snapshot: Snapshot,
         seed: str,
@@ -108,6 +111,14 @@ class AnalysisOrchestrator:
         project_path: str,
         auto_approve: bool | None = None,
     ) -> LogicalSlice | None:
+        """Propose and optionally approve a logical slice for *seed*.
+
+        Returns the approved slice, or None if auto-approval is disabled.
+        Delegates to the scope pipeline; callers that need finer control
+        can use `self.scope.propose` and `self.scope.approve` directly.
+        """
+        from codeanalyzer.scope.api import SeedSpecification
+
         proposal = self.scope.propose(
             snapshot,
             SeedSpecification(raw=seed),
@@ -124,6 +135,19 @@ class AnalysisOrchestrator:
         snapshot: Snapshot,
         slice_: LogicalSlice,
     ) -> AnalysisResult:
+        """Execute a full analysis run for *slice_* against *snapshot*."""
+        self._ensure_stores(project.path)
+
+        # Build program model and wire real evidence + substrate for this run
+        program_model = self._program_model_builder(snapshot, slice_)
+        evidence_api = ProgramModelEvidenceAPI(program_model)
+        substrate = ProgramModelAnalysisSubstrate(program_model)
+        refiner = StubEvidenceRefiner(
+            evidence_api,
+            self.documentation_api,
+            substrate,
+        )
+
         analysis = AnalysisRun(
             id=f"an_{uuid.uuid4().hex[:12]}",
             slice_id=slice_.id,
@@ -145,7 +169,7 @@ class AnalysisOrchestrator:
                 continue
 
         context = DetectorContext(
-            evidence=self.evidence_api,
+            evidence=evidence_api,
             documentation=self.documentation_api,
             properties=self.property_api,
             snapshot=snapshot,
@@ -159,7 +183,7 @@ class AnalysisOrchestrator:
         evidence_slices: list[MinimalEvidenceSlice] = []
         judgments: list[JudgmentResult] = []
         for finding in findings:
-            refinement = self.refiner.refine_until_done(
+            refinement = refiner.refine_until_done(
                 finding,
                 snapshot=snapshot,
                 slice_=slice_,
@@ -183,6 +207,10 @@ class AnalysisOrchestrator:
             evidence_slices=evidence_slices,
             judgments=judgments,
         )
+
+    # ------------------------------------------------------------------
+    # Internal helpers — kept below public API
+    # ------------------------------------------------------------------
 
     def _ensure_stores(self, project_path: str) -> None:
         if self.stores is None:
@@ -221,3 +249,4 @@ class AnalysisOrchestrator:
             self.stores.findings.save(finding)
         for evidence in evidence_slices:
             self.stores.evidence.save(evidence)
+

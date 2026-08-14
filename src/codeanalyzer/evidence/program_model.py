@@ -97,6 +97,13 @@ class ProgramModelEvidenceAPI(EvidenceAPI):
             stack.extend(graph.callees(node))
         return sorted(seen)
 
+    def node_in_graph(self, node_id: str) -> bool:
+        """Return True if *node_id* appears in at least one call edge."""
+        if self._model is None:
+            return False
+        graph = self._model.call_graph()
+        return bool(graph.callers(node_id) or graph.callees(node_id))
+
     def can_reach(self, source_id: str, target_id: str) -> bool:
         cached = self._reachability_cache.get((source_id, target_id))
         if cached is not None:
@@ -143,8 +150,44 @@ class ProgramModelEvidenceAPI(EvidenceAPI):
     def get_reaching_definitions(self, use_id: str) -> list[dict[str, Any]]:
         return []
 
+    def node_in_data_flow(self, node_id: str) -> bool:
+        """Return True if *node_id* appears in at least one data-flow edge."""
+        if self._model is None:
+            return False
+        graph = self._model.data_flow()
+        return bool(graph.consumers(node_id) or graph.producers(node_id))
+
     def get_data_flow(self, source_id: str, target_id: str) -> list[dict[str, Any]]:
-        return []
+        """Return data-flow paths from *source_id* to *target_id*.
+
+        Uses BFS over DataFlowGraph edges. Each entry is a dict with
+        ``path`` (list of node IDs) and ``kind`` (edge kind along the path).
+        Returns an empty list when no path exists or model is absent.
+        """
+        if self._model is None:
+            return []
+        graph = self._model.data_flow()
+
+        # BFS — record (node, path_so_far)
+        from collections import deque
+
+        queue: deque[tuple[str, list[str]]] = deque([(source_id, [source_id])])
+        visited: set[str] = {source_id}
+        results: list[dict[str, Any]] = []
+
+        while queue:
+            node, path = queue.popleft()
+            if node == target_id and len(path) > 1:
+                results.append({"path": path, "kind": "data_flow"})
+                continue  # keep searching for alternate paths up to a limit
+            if len(results) >= 10:  # cap to avoid explosion
+                break
+            for consumer in graph.consumers(node):
+                if consumer not in visited:
+                    visited.add(consumer)
+                    queue.append((consumer, path + [consumer]))
+
+        return results
 
     def get_value_provenance(self, value_id: str) -> list[dict[str, Any]]:
         return []

@@ -5,7 +5,13 @@ Language-specific frontends produce language-specific representations;
 the detector/evidence layer consumes normalized semantic abstractions.
 """
 
+from codeanalyzer.program.builder import ProgramModelBuilder, empty_program_model_builder
 from codeanalyzer.program.in_memory import InMemoryProgramModel
 from codeanalyzer.program.model import ProgramModel
 
-__all__ = ["InMemoryProgramModel", "ProgramModel"]
+__all__ = [
+    "InMemoryProgramModel",
+    "ProgramModel",
+    "ProgramModelBuilder",
+    "empty_program_model_builder",
+]

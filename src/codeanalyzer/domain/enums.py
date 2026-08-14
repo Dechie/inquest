@@ -6,13 +6,52 @@ from enum import StrEnum
 
 
 class ProvenanceKind(StrEnum):
-    """Epistemic category of a fact entering the reasoning pipeline."""
+    """Origin of a fact — where did it come from?
 
-    PROGRAM_FACT = "PROGRAM_FACT"
-    EXTERNAL_ANALYZER_FACT = "EXTERNAL_ANALYZER_FACT"
-    DERIVED_FACT = "DERIVED_FACT"
-    DOCUMENTATION_FACT = "DOCUMENTATION_FACT"
-    HYPOTHESIS = "HYPOTHESIS"
+    Captures the *source* of the fact, not how firmly it is established.
+    Use EpistemicStatus for certainty.
+    """
+
+    PROGRAM_FACT = "PROGRAM_FACT"                       # observed in source
+    EXTERNAL_ANALYZER_FACT = "EXTERNAL_ANALYZER_FACT"   # tool diagnostic
+    DERIVED_FACT = "DERIVED_FACT"                       # computed by substrate
+    DOCUMENTATION_FACT = "DOCUMENTATION_FACT"           # extracted from docs
+    HYPOTHESIS = "HYPOTHESIS"                           # speculative / LLM
+
+
+class EpistemicStatus(StrEnum):
+    """How firmly a fact is established — orthogonal to its origin.
+
+    Provenance answers *where*; epistemic status answers *how certain*.
+
+    OBSERVED     — directly read from source or tool output; high confidence
+    DERIVED      — computed deterministically from observed facts; high confidence
+    DOCUMENTED   — stated in documentation; believed but unverified in code
+    INFERRED     — pattern-matched or heuristic; medium confidence
+    HYPOTHESIZED — speculative, e.g. LLM suggestion; low confidence
+    """
+
+    OBSERVED = "observed"
+    DERIVED = "derived"
+    DOCUMENTED = "documented"
+    INFERRED = "inferred"
+    HYPOTHESIZED = "hypothesized"
+
+
+# Mapping from ProvenanceKind to the default EpistemicStatus it implies.
+# Used to populate EpistemicStatus when not supplied explicitly.
+_PROVENANCE_TO_EPISTEMIC: dict[ProvenanceKind, EpistemicStatus] = {
+    ProvenanceKind.PROGRAM_FACT: EpistemicStatus.OBSERVED,
+    ProvenanceKind.EXTERNAL_ANALYZER_FACT: EpistemicStatus.OBSERVED,
+    ProvenanceKind.DERIVED_FACT: EpistemicStatus.DERIVED,
+    ProvenanceKind.DOCUMENTATION_FACT: EpistemicStatus.DOCUMENTED,
+    ProvenanceKind.HYPOTHESIS: EpistemicStatus.HYPOTHESIZED,
+}
+
+
+def default_epistemic_status(kind: ProvenanceKind) -> EpistemicStatus:
+    """Return the conventional epistemic status for a given provenance kind."""
+    return _PROVENANCE_TO_EPISTEMIC.get(kind, EpistemicStatus.INFERRED)
 
 
 class EntityType(StrEnum):
