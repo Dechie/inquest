@@ -12,7 +12,12 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from codeanalyzer.domain.entities import Location
-from codeanalyzer.domain.enums import FindingSource, FindingStatus, Severity
+from codeanalyzer.domain.enums import (
+    FindingSource,
+    FindingStatus,
+    Severity,
+    VerificationOutcome,
+)
 from codeanalyzer.domain.evidence import EvidenceRequirement
 
 
@@ -32,6 +37,10 @@ class Finding(BaseModel):
     property_id: str | None = Field(
         default=None,
         description="Correctness property this finding evaluates, if any",
+    )
+    verification_outcome: VerificationOutcome | None = Field(
+        default=None,
+        description="Mechanical property evaluation result; distinct from lifecycle status",
     )
     classification: str | None = None
     severity: Severity = Severity.WARNING

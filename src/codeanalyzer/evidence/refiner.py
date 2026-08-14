@@ -69,7 +69,10 @@ class EvidenceRefiner(ABC):
             and result.rounds < self.max_rounds
             and result.pending_requests
         ):
-            self.substrate.run(snapshot, slice_, result.pending_requests)
+            substrate_result = self.substrate.run(snapshot, slice_, result.pending_requests)
+            apply_facts = getattr(self.evidence, "apply_facts", None)
+            if callable(apply_facts):
+                apply_facts(substrate_result.facts)
             result = self.refine(
                 finding,
                 snapshot=snapshot,

@@ -141,3 +141,11 @@ class RefinementOutcome(StrEnum):
     RESOLVED = "resolved"
     NEEDS_MORE_ANALYSIS = "needs_more_analysis"
     UNRESOLVED = "unresolved"
+
+
+class VerificationOutcome(StrEnum):
+    """Mechanical result of evaluating a correctness property against evidence."""
+
+    PROVEN = "PROVEN"
+    VIOLATED = "VIOLATED"
+    UNKNOWN = "UNKNOWN"

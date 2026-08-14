@@ -18,6 +18,7 @@ from codeanalyzer.domain.enums import (
     PropertySource,
     ProvenanceKind,
     Severity,
+    VerificationOutcome,
 )
 from codeanalyzer.domain.evidence import EvidenceItem, EvidenceRequirement, MinimalEvidenceSlice
 from codeanalyzer.domain.findings import Finding
@@ -379,6 +380,11 @@ class FindingStore:
         payload = {
             "affected_entity_ids": finding.affected_entity_ids,
             "property_id": finding.property_id,
+            "verification_outcome": (
+                finding.verification_outcome.value
+                if finding.verification_outcome is not None
+                else None
+            ),
             "evidence_requirements": [
                 req.model_dump(mode="json") for req in finding.evidence_requirements
             ],
@@ -644,12 +650,16 @@ def _diagnostic_from_row(row: Any) -> ExternalDiagnostic:
 def _finding_from_row(row: Any) -> Finding:
     extra: dict[str, Any] = loads(row["payload"], {})
     requirements = extra.get("evidence_requirements") or []
+    outcome_raw = extra.get("verification_outcome")
     return Finding(
         id=row["id"],
         analysis_id=row["analysis_id"],
         snapshot_id=row["snapshot_id"],
         source=FindingSource(row["source"]),
         property_id=extra.get("property_id"),
+        verification_outcome=(
+            VerificationOutcome(outcome_raw) if outcome_raw is not None else None
+        ),
         detector=row["detector"],
         type=row["type"],
         classification=row["classification"],

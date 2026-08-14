@@ -15,6 +15,7 @@ from codeanalyzer.domain.enums import (
     RefinementOutcome,
     RelationshipType,
     Severity,
+    VerificationOutcome,
 )
 from codeanalyzer.domain.evidence import (
     EvidenceItem,
@@ -59,4 +60,5 @@ __all__ = [
     "SliceMember",
     "Snapshot",
     "SubstrateRunResult",
+    "VerificationOutcome",
 ]

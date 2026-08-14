@@ -2,6 +2,8 @@
 
 **Status:** Conceptually mature architectural baseline; boundary consolidation in progress
 
+Inquest is a deliberately designed system, not a thin LLM wrapper around linters. The architecture grew through repeated refinement: an early `code → CFG → algorithms → LLM` sketch was reworked into a composable evidence-and-property engine, with newer concepts **replacing** older ones instead of piling up beside them. Hard boundaries were chosen on purpose — declarative properties vs verification strategies, provenance vs epistemic status, mechanical facts vs semantic interpretation — so correctness questions stay auditable and repository size never implies proportional LLM context. The [design spec](docs/DESIGN_SPEC.md) records that reasoning in full; this repo is the working implementation.
+
 Inquest analyzes a **logically bounded part** of a codebase to answer:
 
 > **Do declared correctness properties hold, fail, or remain unknown given available evidence?**
