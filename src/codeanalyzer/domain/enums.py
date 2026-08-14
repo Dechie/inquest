@@ -96,3 +96,48 @@ class EvidenceItemType(StrEnum):
     DOCUMENTATION = "documentation"
     DERIVED_FACT = "derived_fact"
     SOURCE_SNIPPET = "source_snippet"
+
+
+class PropertyKind(StrEnum):
+    """Kind of correctness property / contract."""
+
+    ORDERING = "ordering"
+    INVARIANT = "invariant"
+    REACHABILITY = "reachability"
+    LIFECYCLE = "lifecycle"
+    SCHEMA = "schema"
+    STATE_TRANSITION = "state_transition"
+    RESOURCE = "resource"
+    API_CONTRACT = "api_contract"
+    OTHER = "other"
+
+
+class PropertySource(StrEnum):
+    """Where a correctness property originated."""
+
+    DOCUMENTATION = "documentation"
+    DETECTOR_RULE = "detector_rule"
+    FRAMEWORK = "framework"
+    SCHEMA = "schema"
+    USER = "user"
+    LLM_EXTRACTED = "llm_extracted"
+
+
+class AnalysisKind(StrEnum):
+    """Deterministic analysis the substrate may run on demand."""
+
+    REACHABILITY = "reachability"
+    CALL_PATH = "call_path"
+    DOMINANCE = "dominance"
+    POST_DOMINANCE = "post_dominance"
+    DATA_FLOW = "data_flow"
+    DEF_USE = "def_use"
+    PATH_CONDITIONS = "path_conditions"
+
+
+class RefinementOutcome(StrEnum):
+    """Result of evidence refinement for one finding."""
+
+    RESOLVED = "resolved"
+    NEEDS_MORE_ANALYSIS = "needs_more_analysis"
+    UNRESOLVED = "unresolved"

@@ -10,10 +10,10 @@ from codeanalyzer.scope.api import SeedSpecification
 
 def test_scaffold_analyze_run(tmp_path: Path) -> None:
     orch = AnalysisOrchestrator()
-    project, snapshot = orch.init_project(tmp_path)
+    project, snapshot = orch.init_project(str(tmp_path))
     proposal = orch.scope.propose(
         snapshot,
-        SeedSpecification(raw="orders"),
+        SeedSpecification(raw="checkout"),
         project_path=str(tmp_path),
     )
     slice_ = orch.scope.approve(snapshot, proposal)
@@ -21,6 +21,8 @@ def test_scaffold_analyze_run(tmp_path: Path) -> None:
 
     assert result.analysis.status.value == "completed"
     assert result.slice.id == slice_.id
-    # Stub detectors return no findings yet
+    assert len(result.properties) >= 1
     assert result.findings == []
     assert result.judgments == []
+    assert orch.stores is not None
+    assert len(orch.stores.properties.list_for_slice(slice_.id)) >= 1

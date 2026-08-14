@@ -29,6 +29,10 @@ class Finding(BaseModel):
     type: str = Field(
         description="Finding type, e.g. 'missing_field_propagation', 'unreachable_code'"
     )
+    property_id: str | None = Field(
+        default=None,
+        description="Correctness property this finding evaluates, if any",
+    )
     classification: str | None = None
     severity: Severity = Severity.WARNING
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)

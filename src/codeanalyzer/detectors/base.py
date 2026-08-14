@@ -1,24 +1,25 @@
 """Detector API.
 
-A detector should not:
-- construct LLM prompts
-- retrieve arbitrary repository files
-- implement its own graph model
-- know how evidence will be serialized for the LLM
+A detector evaluates correctness properties against evidence available through
+the Evidence API. It must not construct LLM prompts, retrieve arbitrary files,
+or implement its own graph model.
 
-Instead: Detector → Finding → Evidence Requirements → Collector → MinimalEvidenceSlice
+Flow: Property → Detector → Evidence queries → Candidate violation → Refinement
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from codeanalyzer.documentation.api import DocumentationAPI
+from codeanalyzer.domain.enums import EvidenceItemType
 from codeanalyzer.domain.findings import Finding
+from codeanalyzer.domain.properties import CorrectnessProperty
 from codeanalyzer.domain.slices import LogicalSlice
 from codeanalyzer.domain.snapshots import AnalysisRun, Snapshot
 from codeanalyzer.evidence.api import EvidenceAPI
+from codeanalyzer.properties.api import PropertyAPI
 
 
 @dataclass
@@ -27,13 +28,15 @@ class DetectorContext:
 
     evidence: EvidenceAPI
     documentation: DocumentationAPI
+    properties: PropertyAPI
     snapshot: Snapshot
     slice: LogicalSlice
     analysis: AnalysisRun
+    active_properties: list[CorrectnessProperty] = field(default_factory=list)
 
 
 class Detector(ABC):
-    """Independent consumer of the Evidence API that produces findings."""
+    """Evaluates properties using the Evidence API; produces candidate findings."""
 
     @property
     @abstractmethod
@@ -45,9 +48,14 @@ class Detector(ABC):
     def finding_types(self) -> list[str]:
         """Finding type strings this detector may emit."""
 
+    @property
+    def required_evidence(self) -> list[EvidenceItemType]:
+        """Evidence kinds this detector needs for a typical evaluation."""
+        return []
+
     @abstractmethod
     def detect(self, context: DetectorContext) -> list[Finding]:
-        """Run detection over the logical slice; return candidate findings."""
+        """Evaluate applicable properties; return candidate findings."""
 
 
 class DetectorRegistry:
@@ -68,5 +76,15 @@ class DetectorRegistry:
     def run_all(self, context: DetectorContext) -> list[Finding]:
         findings: list[Finding] = []
         for detector in self._detectors.values():
-            findings.extend(detector.detect(context))
+            prop_subset = context.properties.for_detector(detector.id, context.slice)
+            detector_context = DetectorContext(
+                evidence=context.evidence,
+                documentation=context.documentation,
+                properties=context.properties,
+                snapshot=context.snapshot,
+                slice=context.slice,
+                analysis=context.analysis,
+                active_properties=prop_subset,
+            )
+            findings.extend(detector.detect(detector_context))
         return findings

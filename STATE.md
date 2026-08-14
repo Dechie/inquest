@@ -1,179 +1,163 @@
 # Current State
 
-**Updated:** 2026-08-11
+**Updated:** 2026-08-14
 
-This file tracks the current state of the codebase, what is working, what is
-scaffolded, and what should be done next. It is the operational companion to
-`docs/DESIGN_SPEC.md` (the architecture baseline) and `README.md` (project
-overview).
+Operational companion to [DESIGN_SPEC.md](docs/DESIGN_SPEC.md) (eleven-layer
+architectural baseline) and [ARCHITECTURE.md](docs/ARCHITECTURE.md) (scaffolding
+map).
 
 ---
 
 ## 1. Summary
 
-The repository contains **initial scaffolding** for the Codebase Correctness
-Analysis System (Phases A–F of the roadmap are interface/stub level only).
-All stable architectural interfaces from the design spec exist as ABCs, all
-domain models are implemented, the SQLite schema is complete, and an
-end-to-end orchestrator wires the subsystems together — but every heavy
-component (frontends, graph construction, analyzer execution, evidence
-collection, LLM reasoning) is a stub.
-
-Verification status:
+Scaffolding has been **re-aligned to the rebuilt architecture**. The original
+four-stage pipeline (`identify files → CFGs → BFS/DFS → LLM`) is replaced in
+code by the most critical new layers:
 
 ```text
-pytest   14 passed
-mypy     no issues (59 files, strict)
-ruff     all checks passed
+Properties (Layer 6)
+    ↕
+Detectors (Layer 7)  →  Evidence Refinement (Layer 8)
+                              ↕ feedback
+                    Analysis Substrate (Layer 4)
+                              ↓
+                       Evidence API (Layer 5)
+```
+
+What is **implemented now** (still stub-level for heavy work):
+
+- Domain models for **CorrectnessProperty**, **AnalysisRequest**, **RefinementResult**
+- **PropertyAPI** + seed catalog + **StubPropertyAPI**
+- **AnalysisSubstrate** + **StubAnalysisSubstrate** (records refinement requests)
+- **EvidenceRefiner** + **StubEvidenceRefiner** (iterative refinement loop)
+- **DetectorContext** is property-aware; registry binds properties per detector
+- **AnalysisOrchestrator** runs: properties → detectors → refine-until-done → LLM
+- SQLite **`properties`** table + **PropertyStore** (schema v2 migration)
+
+Everything else from the prior scaffold remains (domain models, Evidence API
+ABC, scope pipeline, analyzer adapters, persistence stores, CLI) but is not
+yet backed by real program analysis.
+
+---
+
+## 2. Architectural alignment
+
+| Layer | Package | Status |
+| ----- | ------- | ------ |
+| 1 Codebase & external inputs | `analyzers/`, `repository/` | Adapters stubbed; no execution |
+| 2 Logical slice | `scope/` | Hybrid pipeline works; expansion stubbed |
+| 3 Program representation | `program/` | Graph classes + ABCs; no frontend |
+| 4 Analysis substrate | `analysis/` | **New** — ABC + stub; no real facts |
+| 5 Evidence API | `evidence/api.py` | Full ABC; stub backend |
+| 6 Properties / contracts | `properties/` | **New** — API + catalog + persistence |
+| 7 Detectors | `detectors/` | **Updated** — property-aware; still no findings |
+| 8 Evidence refinement | `evidence/refiner.py` | **New** — loop wired; minimal collection |
+| 9 Documentation | `documentation/` | ABC + stub |
+| 10 LLM | `llm/` | ABC + stub judgment |
+| 11 Persistent artifacts | `persistence/`, `pipeline/` | Stores write slices/analyses/properties |
+
+Conceptual order ≠ runtime order. The orchestrator already models one feedback
+loop: refinement → substrate → refinement.
+
+---
+
+## 3. What works (non-stub)
+
+- **ScopeResolutionPipeline** — propose → validate → approve with injectable LLM hooks
+- **CallGraph / CFG / data-flow graph** classes + BFS reachability (internal to substrate)
+- **Persistence** — projects, snapshots, slices, analyses, findings, evidence, **properties**
+- **Orchestrator** — end-to-end run loads properties, runs detectors, refines evidence, persists
+- **CLI** — `init`, `status`, `scope`, `analyze`, `detectors`, `analyzers`
+
+Run verification:
+
+```bash
+pytest && mypy --strict && ruff check .
 ```
 
 ---
 
-## 2. What Exists (Working)
+## 4. What is scaffolded (stub only)
 
-### Domain models — complete (`src/codeanalyzer/domain/`)
-
-- `ProvenanceKind` (5 epistemic categories from spec §2.6/§22)
-- `ProvenancedFact.is_authoritative_structure()` — hypotheses never
-  authoritative
-- `Entity`, `Location`, `Relationship` with typed relationships
-- `Finding` (§16/§19) with `FindingSource`, `FindingStatus`, `Severity`
-- `LogicalSlice` / `SliceMember` (§6, explainable membership §5.3)
-- `MinimalEvidenceSlice`, `EvidenceRequirement`, `EvidenceItem` (§20)
-- `Project`, `Snapshot`, `AnalysisRun` (§27 snapshot identity)
-- `ExternalDiagnostic` (§8.2), `DocumentationUnit`, `DocEntityLink`
-
-### Stable interfaces — complete as ABCs (`§31`)
-
-| Interface | Location | Status |
-|-----------|----------|--------|
-| Scope API | `scope/api.py` | ABC + working stub pipeline |
-| Analyzer Adapter API | `analyzers/adapter.py` | ABC + stub adapters |
-| Evidence API | `evidence/api.py` | Full ABC, stub backend |
-| Documentation API | `documentation/api.py` | Full ABC, stub backend |
-| Detector API | `detectors/base.py` | ABC + registries |
-| Finding / MinimalEvidenceSlice | `domain/` | Concrete models |
-| LLM hooks | `llm/scope.py`, `llm/judgment.py` | ABCs + stubs |
-
-### Working logic (non-stub)
-
-- `program/graphs/` — `CallGraph.can_reach`, callers/callees; CFG
-  successors/predecessors; data-flow producers/consumers
-- `program/algorithms/reachability.py` — BFS reachability + path finding
-  (kept internal, per §11)
-- `scope/resolver.py` — `ScopeResolutionPipeline`: propose → validate →
-  approve flow with LLM hooks injectable; human-approval checkpoint
-- `analyzers/registry.py` — adapter registration, discovery, per-project
-  selection
-- `persistence/` — SQLite schema (all §26 tables), DB bootstrap with
-  migrations, `.codeanalyzer/` filesystem layout (`analysis.db`, `graphs/`,
-  `snapshots/`, `cache/`)
-- `repository/manager.py` — project registration, snapshot creation with
-  git commit detection
-- `pipeline/orchestrator.py` — end-to-end wiring (init → scope → analyzers
-  → detectors → collector → judge → result)
-- `cli.py` — `init`, `status`, `scope`, `analyze`, `detectors`, `analyzers`
-- `detectors/catalog.py` — initial detector ids (§15), delegated-to-external
-  list (§8.4), deferred domains (§17)
+| Component | Behavior |
+| --------- | -------- |
+| Language frontends / ProgramModel | ABC only |
+| AnalysisSubstrate | Accepts requests; returns no derived facts |
+| Evidence API backend | All queries empty |
+| Property catalog | Fixed seed properties; heuristic by slice name |
+| Detectors | Declare evidence needs; return no findings |
+| Evidence refiner | Maps requirements → queries; requests analysis when data missing |
+| Analyzer adapters | `discover()` false; `analyze` raises |
+| LLM judgment | `INSUFFICIENT_EVIDENCE` |
+| Scope expansion | Passthrough stub resolver |
 
 ---
 
-## 3. What Is Scaffolded (Stub Only)
+## 5. Known gaps (prioritized)
 
-| Component | Scaffold behavior | Phase |
-|-----------|-------------------|-------|
-| Language frontends | `LanguageFrontend` ABC only; no parsers | A |
-| Program model | `ProgramModel` ABC only; no implementation | A |
-| Dominance / post-dominance | Only EvidenceAPI signatures | A |
-| AST / IR / symbol table | Not started | A |
-| Analyzer adapters | `discover()` always False; `analyze`/`normalize` raise | B |
-| Scope expansion | Ungrounded pass-through (`StubDeterministicScopeResolver`) | C |
-| LLM scope interpretation | Passthrough/identity stubs | C |
-| SQLite stores | Schema only — nothing is written to the DB | A |
-| Evidence collection | Empty slice with requirement kinds noted | D |
-| Detectors | Identity-only stubs returning no findings | E |
-| LLM judgment | `INSUFFICIENT_EVIDENCE` verdict | F |
-| Settings | `config/settings.py` exists but is unwired | — |
+1. **No real program representation** — Evidence API and substrate have nothing to query; refinement always requests analysis or stays empty.
+2. **No real detectors** — property binding exists but no detector evaluates properties against facts.
+3. **No analyzer execution** — external diagnostics never enter evidence.
+4. **Documentation layer unused in pipeline** — associated during refinement only when findings exist.
+5. **Substrate ↔ Evidence API not connected** — substrate facts don't feed back into evidence queries yet.
+6. Incremental analysis, detector composition, formal property evaluation — unstarted (by design).
 
 ---
 
-## 4. Known Gaps (Prioritized)
+## 6. What to do next
 
-1. **No persistence writes** — `Database` applies the schema but no store
-   layer exists; `ScopeResolutionPipeline` keeps slices in memory. The
-   "named persistent logical slice" (§6) is not yet persistent, and
-   `AnalysisResult` is never stored (§25/§27).
-2. **No real program representation** — nothing builds entities,
-   relationships, call graph, CFG, or data flow from actual source. The
-   Evidence API has no real backend, so detectors have no facts to consume.
-3. **No analyzer execution** — adapters cannot run tools, parse output, or
-   capture versions/configuration (§8.2).
-4. **No real detectors or LLM reasoning** — Phase E/F are the eventual
-   payoff; the interfaces they need already exist.
-5. **Incremental analysis (§28)** and **detector composition (§18)** are
-   unstarted (by design — later phases).
-6. **Settings/config not wired** — `enable_llm`, `max_evidence_items`,
-   `auto_approve_scope` are ignored by the pipeline.
+### Immediate (complete Layer 4 ↔ 5 bridge)
 
----
+- [ ] Implement a minimal `ProgramModel` + `EvidenceAPI` backend over call graph
+- [ ] Wire `AnalysisSubstrate.run()` to use `program/algorithms/` and register facts the Evidence API can serve
+- [ ] After substrate produces facts, refiner should re-query (second round resolves)
 
-## 5. What to Do Next
+### First real detector (Layer 7)
 
-### Immediate (before starting Phase A work)
+- [ ] Implement `possible_missing_call` against `RESERVE_BEFORE_PERSIST` using only Evidence API
+- [ ] Finding carries `property_id`; refiner builds minimal slice from call path + doc invariant
 
-- [ ] Decide the first target language/framework for the frontend
-      (e.g. Python or TypeScript; nothing language-specific exists yet)
-- [ ] Add a SQLite store layer (ProjectStore, SnapshotStore, SliceStore,
-      AnalysisStore, FindingStore, EvidenceStore) implementing the schema
-- [ ] Wire persistence into `ScopeResolutionPipeline.approve()` and
-      `AnalysisOrchestrator.run()`
-- [ ] Wire `Settings` into the orchestrator and CLI
+### Phase A/B continuation
 
-### Phase A — Program substrate
+- [ ] Language frontend for first target ecosystem
+- [ ] One working analyzer adapter (`normalize` + persist diagnostics)
 
-- [ ] Implement a `LanguageFrontend` for the first language: parse source
-      into entities + relationships, then build call graph, CFG, data-flow
-- [ ] Implement `ProgramModel` concrete class backed by the frontend
-- [ ] Implement dominance/post-dominance algorithms behind the existing
-      EvidenceAPI signatures
-- [ ] Persist entities/relationships per snapshot
+### Hygiene
 
-### Phase B — External analyzers
-
-- [ ] Implement real `discover()` (PATH/config probing) and process
-      execution in `analyze()`
-- [ ] Implement `normalize()` for at least one adapter (e.g. PHPStan JSON
-      or ESLint JSON output), capturing analyzer version + configuration
-- [ ] Persist `ExternalDiagnostic` rows
-
-### Phase C — Scope engine
-
-- [ ] Implement deterministic expansion over real imports/call graph
-      (replace `StubDeterministicScopeResolver`)
-- [ ] Implement `validate_structural_claims` against the program model
-- [ ] Wire an actual LLM provider into `ScopeInterpreter`/`ScopeReviewer`
-      (or keep them as pure interfaces until Phase F)
-
-### Phase D — Evidence architecture
-
-- [ ] Implement a real `EvidenceCollector` that maps
-      `EvidenceRequirement`s to concrete EvidenceAPI queries and
-      materializes minimal slices (this is architecturally critical per §33)
-
-### Phase E/F — Detectors + LLM
-
-- [ ] Implement the first detector from the catalog
-      (e.g. `possible_missing_call` or `missing_field_propagation`) using
-      only EvidenceAPI/DocumentationAPI
-- [ ] Implement `SemanticJudge` against a provider once evidence slices are
-      real
+- Keep pytest / mypy / ruff green
+- New subsystems must go through Evidence API and Property API — no bypass
+- Design changes → `docs/DESIGN_SPEC.md`; scaffold map → `docs/ARCHITECTURE.md`; this file → operational state
 
 ---
 
-## 6. Ongoing Hygiene
+## 7. Key files (new / changed)
 
-- Keep `pytest`, `mypy --strict`, and `ruff` green — currently all pass
-- New subsystems must go through the stable interfaces (§31); nothing may
-  bypass the Evidence API or write LLM-derived structure into the graphs
-- Design spec changes belong in `docs/DESIGN_SPEC.md`; scaffold alignment
-  notes in `docs/ARCHITECTURE.md`; this file tracks operational state
+```text
+src/codeanalyzer/
+├── analysis/           # Layer 4 — substrate ABC + stub
+├── properties/         # Layer 6 — property API + catalog + stub
+├── domain/
+│   ├── properties.py   # CorrectnessProperty
+│   └── analysis.py     # AnalysisRequest, SubstrateRunResult
+├── evidence/
+│   └── refiner.py      # Layer 8 — iterative refinement
+├── detectors/base.py   # property-aware DetectorContext
+└── pipeline/orchestrator.py  # property → detector → refine loop
+```
+
+---
+
+## 8. Design invariant (unchanged intent, new shape)
+
+```text
+Logical Slice
+    → Evidence API (+ external inputs)
+    → Properties
+    → Detectors
+    → Evidence Refinement ↔ Analysis Substrate
+    → Documentation
+    → LLM
+    → Persistent artifacts
+```
+
+Never: `source → LLM → "probably buggy"`.

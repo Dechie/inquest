@@ -6,7 +6,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from codeanalyzer.persistence.schema import SCHEMA_SQL, SCHEMA_VERSION
+from codeanalyzer.persistence.schema import MIGRATION_V2_SQL, SCHEMA_SQL
 
 
 class Database:
@@ -27,14 +27,18 @@ class Database:
     def initialize(self) -> None:
         conn = self.connect()
         conn.executescript(SCHEMA_SQL)
-        row = conn.execute(
-            "SELECT version FROM schema_migrations WHERE version = ?",
-            (SCHEMA_VERSION,),
-        ).fetchone()
-        if row is None:
+        applied = {
+            row[0]
+            for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
+        }
+        migrations: dict[int, str] = {2: MIGRATION_V2_SQL}
+        for version in sorted(migrations):
+            if version in applied:
+                continue
+            conn.executescript(migrations[version])
             conn.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (SCHEMA_VERSION, datetime.now(UTC).isoformat()),
+                (version, datetime.now(UTC).isoformat()),
             )
         conn.commit()
 

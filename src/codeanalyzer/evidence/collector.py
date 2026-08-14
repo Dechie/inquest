@@ -18,9 +18,16 @@ from codeanalyzer.evidence.api import EvidenceAPI
 class EvidenceCollector(ABC):
     """Builds a MinimalEvidenceSlice for a finding from its evidence requirements."""
 
-    def __init__(self, evidence: EvidenceAPI, documentation: DocumentationAPI) -> None:
+    def __init__(
+        self,
+        evidence: EvidenceAPI,
+        documentation: DocumentationAPI,
+        *,
+        max_items: int = 50,
+    ) -> None:
         self.evidence = evidence
         self.documentation = documentation
+        self.max_items = max_items
 
     @abstractmethod
     def collect(self, finding: Finding) -> MinimalEvidenceSlice:
@@ -33,6 +40,13 @@ class EvidenceCollector(ABC):
             finding_id=finding.id,
         )
 
+    def cap_items(self, slice_: MinimalEvidenceSlice) -> MinimalEvidenceSlice:
+        """Enforce Settings.max_evidence_items (minimum sufficient evidence)."""
+        if len(slice_.items) > self.max_items:
+            slice_.items = slice_.items[: self.max_items]
+            slice_.metadata["truncated"] = "true"
+        return slice_
+
 
 class StubEvidenceCollector(EvidenceCollector):
     """Phase D scaffold — returns an empty slice with declared requirements noted."""
@@ -42,4 +56,4 @@ class StubEvidenceCollector(EvidenceCollector):
         # Record requirement kinds so downstream can see intent without full collection.
         for req in finding.evidence_requirements:
             slice_.metadata[f"req:{req.kind.value}"] = req.description
-        return slice_
+        return self.cap_items(slice_)

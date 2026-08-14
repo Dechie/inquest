@@ -2,5 +2,6 @@
 
 from codeanalyzer.evidence.api import EvidenceAPI
 from codeanalyzer.evidence.collector import EvidenceCollector
+from codeanalyzer.evidence.refiner import EvidenceRefiner, StubEvidenceRefiner
 
-__all__ = ["EvidenceAPI", "EvidenceCollector"]
+__all__ = ["EvidenceAPI", "EvidenceCollector", "EvidenceRefiner", "StubEvidenceRefiner"]

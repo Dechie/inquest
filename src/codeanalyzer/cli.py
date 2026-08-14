@@ -14,13 +14,14 @@ from codeanalyzer.analyzers.adapters import (
     PHPStanAdapter,
     TypeScriptAdapter,
 )
+from codeanalyzer.config.settings import Settings
 from codeanalyzer.detectors.catalog import (
     DEFERRED_DOMAINS,
     DELEGATED_TO_EXTERNAL,
     INITIAL_DETECTOR_IDS,
 )
-from codeanalyzer.persistence.db import Database
 from codeanalyzer.persistence.paths import AnalysisPaths
+from codeanalyzer.persistence.stores import Stores
 from codeanalyzer.pipeline.orchestrator import AnalysisOrchestrator
 from codeanalyzer.scope.api import SeedSpecification
 
@@ -60,6 +61,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze_p.add_argument("seed", help="Feature seed for scope resolution")
     analyze_p.add_argument("--path", default=".", help="Project root")
+    analyze_p.add_argument(
+        "--approve",
+        action="store_true",
+        help="Auto-approve the proposed slice before analysis (dev only)",
+    )
+    analyze_p.add_argument(
+        "--enable-llm",
+        action="store_true",
+        help="Run the semantic judge (currently a Phase F stub)",
+    )
 
     sub.add_parser("detectors", help="List planned / stub detectors")
     sub.add_parser("analyzers", help="List analyzer adapter stubs")
@@ -67,28 +78,60 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _settings_for(
+    path: str,
+    *,
+    approve: bool = False,
+    enable_llm: bool = False,
+) -> Settings:
+    root = str(Path(path).resolve())
+    return Settings.from_environ().with_cli_overrides(
+        project_path=root,
+        auto_approve=approve,
+        enable_llm=enable_llm,
+    )
+
+
 def cmd_init(path: str) -> int:
-    root = Path(path).resolve()
-    paths = AnalysisPaths.for_project(root)
-    paths.ensure()
-    db = Database(paths.db_path)
-    db.initialize()
-    db.close()
+    settings = _settings_for(path)
+    orch = AnalysisOrchestrator(settings=settings)
+    project, snapshot = orch.init_project(path)
+    paths = orch.repo.paths
+    assert paths is not None
     print(f"Initialized analysis store at {paths.root}")
     print(f"  database: {paths.db_path}")
     print(f"  graphs:   {paths.graphs_dir}")
     print(f"  snapshots:{paths.snapshots_dir}")
     print(f"  cache:    {paths.cache_dir}")
+    print(f"  project:  {project.id} ({project.name})")
+    print(f"  snapshot: {snapshot.id}")
     return 0
 
 
 def cmd_status(path: str) -> int:
+    settings = _settings_for(path)
     root = Path(path).resolve()
-    paths = AnalysisPaths.for_project(root)
+    paths = AnalysisPaths.for_project(root, dir_name=settings.analysis_dir_name)
     print(f"codeanalyzer {__version__}")
     print(f"project: {root}")
     print(f"analysis dir: {paths.root} ({'exists' if paths.root.exists() else 'missing'})")
     print(f"db: {paths.db_path} ({'exists' if paths.db_path.exists() else 'missing'})")
+    print()
+    print("Settings:")
+    print(f"  languages: {', '.join(settings.languages)}")
+    print(f"  enable_llm: {settings.enable_llm}")
+    print(f"  max_evidence_items: {settings.max_evidence_items}")
+    print(f"  auto_approve_scope: {settings.auto_approve_scope}")
+    if paths.db_path.exists():
+        stores = Stores.open(paths)
+        print()
+        print("Persisted:")
+        print(f"  projects: {len(stores.projects.list_all())}")
+        print(f"  snapshots: {len(stores.snapshots.list_all())}")
+        print(f"  slices: {len(stores.slices.list())}")
+        print(f"  analyses: {len(stores.analyses.list_all())}")
+        print(f"  findings: {len(stores.findings.list_all())}")
+        stores.close()
     print()
     print("Roadmap phases:")
     print("  A  Repository + program substrate")
@@ -107,8 +150,9 @@ def cmd_status(path: str) -> int:
 
 
 def cmd_scope(seed: str, path: str, approve: bool) -> int:
-    orch = AnalysisOrchestrator()
-    project, snapshot = orch.init_project(path)
+    settings = _settings_for(path, approve=approve)
+    orch = AnalysisOrchestrator(settings=settings)
+    _project, snapshot = orch.init_project(path)
     pipeline = orch.scope
     proposal = pipeline.propose(
         snapshot,
@@ -129,7 +173,7 @@ def cmd_scope(seed: str, path: str, approve: bool) -> int:
             print(f"  {mark} {m.entity_id}" + (f"  ({reasons})" if reasons else ""))
         print()
 
-    if approve:
+    if settings.auto_approve_scope:
         slice_ = pipeline.approve(snapshot, proposal)
         print(f"Approved and stored slice id={slice_.id}")
     else:
@@ -137,14 +181,18 @@ def cmd_scope(seed: str, path: str, approve: bool) -> int:
     return 0
 
 
-def cmd_analyze(seed: str, path: str) -> int:
-    orch = AnalysisOrchestrator()
+def cmd_analyze(seed: str, path: str, approve: bool, enable_llm: bool) -> int:
+    settings = _settings_for(path, approve=approve, enable_llm=enable_llm)
+    orch = AnalysisOrchestrator(settings=settings)
     project, snapshot = orch.init_project(path)
     proposal = orch.scope.propose(
         snapshot,
         SeedSpecification(raw=seed),
         project_path=str(Path(path).resolve()),
     )
+    if not settings.auto_approve_scope:
+        print("Scope not approved. Re-run with --approve after review.")
+        return 1
     slice_ = orch.scope.approve(snapshot, proposal)
     result = orch.run(project, snapshot, slice_)
     payload = {
@@ -218,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "scope":
         return cmd_scope(args.seed, args.path, args.approve)
     if args.command == "analyze":
-        return cmd_analyze(args.seed, args.path)
+        return cmd_analyze(args.seed, args.path, args.approve, args.enable_llm)
     if args.command == "detectors":
         return cmd_detectors()
     if args.command == "analyzers":

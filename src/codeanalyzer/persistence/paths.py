@@ -22,8 +22,13 @@ class AnalysisPaths:
     root: Path
 
     @classmethod
-    def for_project(cls, project_root: str | Path) -> AnalysisPaths:
-        return cls(root=Path(project_root).resolve() / ANALYSIS_DIR_NAME)
+    def for_project(
+        cls,
+        project_root: str | Path,
+        *,
+        dir_name: str = ANALYSIS_DIR_NAME,
+    ) -> AnalysisPaths:
+        return cls(root=Path(project_root).resolve() / dir_name)
 
     @property
     def db_path(self) -> Path:

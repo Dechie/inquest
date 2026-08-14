@@ -20,6 +20,7 @@ from abc import ABC, abstractmethod
 from codeanalyzer.domain.enums import MembershipClass
 from codeanalyzer.domain.slices import LogicalSlice, SliceMember
 from codeanalyzer.domain.snapshots import Snapshot
+from codeanalyzer.persistence.stores import SliceStore
 from codeanalyzer.scope.api import CandidateSeeds, ScopeAPI, ScopeProposal, SeedSpecification
 
 
@@ -94,9 +95,11 @@ class ScopeResolutionPipeline(ScopeAPI):
         resolver: DeterministicScopeResolver | None = None,
         *,
         store: dict[str, LogicalSlice] | None = None,
+        slice_store: SliceStore | None = None,
     ) -> None:
         self.resolver = resolver or StubDeterministicScopeResolver()
         self._store: dict[str, LogicalSlice] = store if store is not None else {}
+        self.slice_store = slice_store
 
     def interpret_seed(self, seed: SeedSpecification) -> CandidateSeeds:
         """LLM Scope Interpreter hook (scaffold: passthrough).
@@ -163,12 +166,18 @@ class ScopeResolutionPipeline(ScopeAPI):
             approved=True,
         )
         self._store[slice_.id] = slice_
+        if self.slice_store is not None:
+            self.slice_store.save(slice_)
         return slice_
 
     def get_slice(self, slice_id: str) -> LogicalSlice | None:
+        if self.slice_store is not None:
+            return self.slice_store.get(slice_id)
         return self._store.get(slice_id)
 
     def list_slices(self, snapshot_id: str | None = None) -> list[LogicalSlice]:
+        if self.slice_store is not None:
+            return self.slice_store.list(snapshot_id=snapshot_id)
         slices = list(self._store.values())
         if snapshot_id is not None:
             slices = [s for s in slices if s.snapshot_id == snapshot_id]

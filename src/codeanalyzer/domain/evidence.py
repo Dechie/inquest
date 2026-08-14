@@ -10,7 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from codeanalyzer.domain.enums import EvidenceItemType
+from codeanalyzer.domain.analysis import AnalysisRequest
+from codeanalyzer.domain.enums import EvidenceItemType, RefinementOutcome
 from codeanalyzer.domain.provenance import Provenance, ProvenancedFact
 
 
@@ -49,6 +50,7 @@ class MinimalEvidenceSlice(BaseModel):
 
     id: str
     finding_id: str
+    property_id: str | None = None
     program_entities: list[str] = Field(default_factory=list)
     call_edges: list[str] = Field(default_factory=list)
     control_flow_fragments: list[dict[str, Any]] = Field(default_factory=list)
@@ -60,3 +62,12 @@ class MinimalEvidenceSlice(BaseModel):
     facts: list[ProvenancedFact] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class RefinementResult(BaseModel):
+    """Outcome of iterative evidence refinement for one finding."""
+
+    slice: MinimalEvidenceSlice
+    outcome: RefinementOutcome
+    pending_requests: list[AnalysisRequest] = Field(default_factory=list)
+    rounds: int = 0

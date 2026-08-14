@@ -9,27 +9,40 @@ from pathlib import Path
 
 from codeanalyzer.domain.snapshots import Project, Snapshot
 from codeanalyzer.persistence.paths import AnalysisPaths
+from codeanalyzer.persistence.stores import Stores
 
 
 class RepositoryManager:
     """Registers projects and creates analysis snapshots."""
 
-    def __init__(self, paths: AnalysisPaths | None = None) -> None:
+    def __init__(
+        self,
+        paths: AnalysisPaths | None = None,
+        stores: Stores | None = None,
+    ) -> None:
         self.paths = paths
+        self.stores = stores
         self._projects: dict[str, Project] = {}
         self._snapshots: dict[str, Snapshot] = {}
 
     def register_project(self, path: str | Path, name: str | None = None) -> Project:
         root = Path(path).resolve()
+        resolved = str(root)
+        if self.stores is not None:
+            existing = self.stores.projects.get_by_path(resolved)
+            if existing is not None:
+                self._projects[existing.id] = existing
+                self._ensure_paths(root)
+                return existing
         project = Project(
             id=f"proj_{uuid.uuid4().hex[:12]}",
-            path=str(root),
+            path=resolved,
             name=name or root.name,
         )
         self._projects[project.id] = project
-        if self.paths is None:
-            self.paths = AnalysisPaths.for_project(root)
-            self.paths.ensure()
+        if self.stores is not None:
+            self.stores.projects.save(project)
+        self._ensure_paths(root)
         return project
 
     def create_snapshot(
@@ -49,13 +62,36 @@ class RepositoryManager:
             label=label,
         )
         self._snapshots[snapshot.id] = snapshot
+        if self.stores is not None:
+            self.stores.snapshots.save(snapshot)
         return snapshot
 
     def get_project(self, project_id: str) -> Project | None:
-        return self._projects.get(project_id)
+        cached = self._projects.get(project_id)
+        if cached is not None:
+            return cached
+        if self.stores is not None:
+            project = self.stores.projects.get(project_id)
+            if project is not None:
+                self._projects[project.id] = project
+            return project
+        return None
 
     def get_snapshot(self, snapshot_id: str) -> Snapshot | None:
-        return self._snapshots.get(snapshot_id)
+        cached = self._snapshots.get(snapshot_id)
+        if cached is not None:
+            return cached
+        if self.stores is not None:
+            snapshot = self.stores.snapshots.get(snapshot_id)
+            if snapshot is not None:
+                self._snapshots[snapshot.id] = snapshot
+            return snapshot
+        return None
+
+    def _ensure_paths(self, root: Path) -> None:
+        if self.paths is None:
+            self.paths = AnalysisPaths.for_project(root)
+            self.paths.ensure()
 
     @staticmethod
     def _detect_commit(project_path: str) -> str | None:

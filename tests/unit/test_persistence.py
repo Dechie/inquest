@@ -41,6 +41,7 @@ def test_database_schema(tmp_path: Path) -> None:
         "evidence_items",
         "documentation",
         "doc_entities",
+        "properties",
         "schema_migrations",
     }
     assert expected.issubset(tables)

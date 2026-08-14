@@ -1,7 +1,9 @@
-"""End-to-end operational flow (architecture §30).
+"""End-to-end operational flow (architecture §15).
 
-User intent → scope → program model + external analyzers → detectors →
-minimal evidence → LLM judgment → stored result.
+Conceptual order with feedback loops:
+  slice → program representation + external inputs → analysis substrate →
+  evidence API → properties → detectors → evidence refinement →
+  documentation → LLM → persistent artifacts.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
+from codeanalyzer.analysis.stub import StubAnalysisSubstrate
 from codeanalyzer.analyzers.adapters import (
     ESLintAdapter,
     FlutterAnalyzeAdapter,
@@ -18,17 +21,22 @@ from codeanalyzer.analyzers.adapters import (
     TypeScriptAdapter,
 )
 from codeanalyzer.analyzers.registry import AnalyzerRegistry
+from codeanalyzer.config.settings import Settings
 from codeanalyzer.detectors.base import DetectorContext, DetectorRegistry
 from codeanalyzer.detectors.stubs import build_stub_detectors
 from codeanalyzer.documentation.stub import StubDocumentationAPI
 from codeanalyzer.domain.diagnostics import ExternalDiagnostic
-from codeanalyzer.domain.evidence import MinimalEvidenceSlice
+from codeanalyzer.domain.evidence import MinimalEvidenceSlice, RefinementResult
 from codeanalyzer.domain.findings import Finding
+from codeanalyzer.domain.properties import CorrectnessProperty
 from codeanalyzer.domain.slices import LogicalSlice
 from codeanalyzer.domain.snapshots import AnalysisRun, AnalysisStatus, Project, Snapshot
-from codeanalyzer.evidence.collector import StubEvidenceCollector
+from codeanalyzer.evidence.refiner import StubEvidenceRefiner
 from codeanalyzer.evidence.stub import StubEvidenceAPI
 from codeanalyzer.llm.judgment import JudgmentResult, StubSemanticJudge
+from codeanalyzer.persistence.paths import AnalysisPaths
+from codeanalyzer.persistence.stores import Stores
+from codeanalyzer.properties.stub import StubPropertyAPI
 from codeanalyzer.repository.manager import RepositoryManager
 from codeanalyzer.scope.api import SeedSpecification
 from codeanalyzer.scope.resolver import ScopeResolutionPipeline
@@ -39,22 +47,28 @@ class AnalysisResult(BaseModel):
 
     analysis: AnalysisRun
     slice: LogicalSlice
+    properties: list[CorrectnessProperty] = Field(default_factory=list)
     diagnostics: list[ExternalDiagnostic] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
+    refinements: list[RefinementResult] = Field(default_factory=list)
     evidence_slices: list[MinimalEvidenceSlice] = Field(default_factory=list)
     judgments: list[JudgmentResult] = Field(default_factory=list)
 
 
 class AnalysisOrchestrator:
-    """Wires subsystems for the scaffolded end-to-end pipeline.
+    """Wires subsystems for the property-aware analysis pipeline."""
 
-    Real program models, analyzers, and LLM stages plug in without changing
-    this orchestration shape.
-    """
-
-    def __init__(self) -> None:
-        self.repo = RepositoryManager()
-        self.scope = ScopeResolutionPipeline()
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        stores: Stores | None = None,
+    ) -> None:
+        self.settings = settings or Settings()
+        self.stores = stores
+        self.repo = RepositoryManager(stores=stores)
+        self.scope = ScopeResolutionPipeline(
+            slice_store=stores.slices if stores is not None else None
+        )
         self.analyzers = AnalyzerRegistry()
         for adapter_cls in (
             FlutterAnalyzeAdapter,
@@ -70,10 +84,18 @@ class AnalysisOrchestrator:
 
         self.evidence_api = StubEvidenceAPI()
         self.documentation_api = StubDocumentationAPI()
-        self.collector = StubEvidenceCollector(self.evidence_api, self.documentation_api)
+        self.property_api = StubPropertyAPI()
+        self.substrate = StubAnalysisSubstrate()
+        self.refiner = StubEvidenceRefiner(
+            self.evidence_api,
+            self.documentation_api,
+            self.substrate,
+            max_items=self.settings.max_evidence_items,
+        )
         self.judge = StubSemanticJudge()
 
     def init_project(self, path: str, name: str | None = None) -> tuple[Project, Snapshot]:
+        self._ensure_stores(path)
         project = self.repo.register_project(path, name=name)
         snapshot = self.repo.create_snapshot(project)
         return project, snapshot
@@ -84,19 +106,16 @@ class AnalysisOrchestrator:
         seed: str,
         *,
         project_path: str,
-        auto_approve: bool = False,
+        auto_approve: bool | None = None,
     ) -> LogicalSlice | None:
-        """Propose a logical slice; auto-approve only when explicitly requested.
-
-        Production flow requires human approval before expensive analysis.
-        """
         proposal = self.scope.propose(
             snapshot,
             SeedSpecification(raw=seed),
             project_path=project_path,
         )
-        if not auto_approve:
-            return None  # caller should present proposal for approval
+        approve = self.settings.auto_approve_scope if auto_approve is None else auto_approve
+        if not approve:
+            return None
         return self.scope.approve(snapshot, proposal)
 
     def run(
@@ -111,9 +130,12 @@ class AnalysisOrchestrator:
             snapshot_id=snapshot.id,
             status=AnalysisStatus.RUNNING,
         )
+        self._persist_analysis(analysis)
+
+        properties = self.property_api.list_for_slice(snapshot, slice_)
+        self._persist_properties(properties)
 
         diagnostics: list[ExternalDiagnostic] = []
-        # Phase B: run discoverable analyzers; scaffold skips unavailable tools.
         for adapter in self.analyzers.discover_available():
             try:
                 diagnostics.extend(
@@ -125,27 +147,77 @@ class AnalysisOrchestrator:
         context = DetectorContext(
             evidence=self.evidence_api,
             documentation=self.documentation_api,
+            properties=self.property_api,
             snapshot=snapshot,
             slice=slice_,
             analysis=analysis,
+            active_properties=properties,
         )
         findings = self.detectors.run_all(context)
 
+        refinements: list[RefinementResult] = []
         evidence_slices: list[MinimalEvidenceSlice] = []
         judgments: list[JudgmentResult] = []
         for finding in findings:
-            evidence = self.collector.collect(finding)
-            evidence_slices.append(evidence)
-            judgments.append(self.judge.judge(finding, evidence))
+            refinement = self.refiner.refine_until_done(
+                finding,
+                snapshot=snapshot,
+                slice_=slice_,
+            )
+            refinements.append(refinement)
+            evidence_slices.append(refinement.slice)
+            if self.settings.enable_llm:
+                judgments.append(self.judge.judge(finding, refinement.slice))
 
         analysis.status = AnalysisStatus.COMPLETED
         analysis.completed_at = datetime.now(UTC)
+        self._persist_result(analysis, diagnostics, findings, evidence_slices)
 
         return AnalysisResult(
             analysis=analysis,
             slice=slice_,
+            properties=properties,
             diagnostics=diagnostics,
             findings=findings,
+            refinements=refinements,
             evidence_slices=evidence_slices,
             judgments=judgments,
         )
+
+    def _ensure_stores(self, project_path: str) -> None:
+        if self.stores is None:
+            paths = AnalysisPaths.for_project(
+                project_path,
+                dir_name=self.settings.analysis_dir_name,
+            )
+            self.stores = Stores.open(paths)
+            self.repo.paths = paths
+        self.repo.stores = self.stores
+        self.scope.slice_store = self.stores.slices
+
+    def _persist_analysis(self, analysis: AnalysisRun) -> None:
+        if self.stores is not None:
+            self.stores.analyses.save(analysis)
+
+    def _persist_properties(self, properties: list[CorrectnessProperty]) -> None:
+        if self.stores is None:
+            return
+        for prop in properties:
+            self.stores.properties.save(prop)
+
+    def _persist_result(
+        self,
+        analysis: AnalysisRun,
+        diagnostics: list[ExternalDiagnostic],
+        findings: list[Finding],
+        evidence_slices: list[MinimalEvidenceSlice],
+    ) -> None:
+        if self.stores is None:
+            return
+        self.stores.analyses.save(analysis)
+        for diagnostic in diagnostics:
+            self.stores.analyses.save_diagnostic(diagnostic)
+        for finding in findings:
+            self.stores.findings.save(finding)
+        for evidence in evidence_slices:
+            self.stores.evidence.save(evidence)
