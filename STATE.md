@@ -1,6 +1,6 @@
 # Current State
 
-**Updated:** 2026-08-14
+**Updated:** 2026-08-14  *(FlutterAnalyzeAdapter + MypyAdapter complete; 96 tests passing)*
 
 Operational companion to [DESIGN_SPEC.md](docs/DESIGN_SPEC.md), [DESIGN_SPEC_SUMMARY.md](docs/DESIGN_SPEC_SUMMARY.md), and [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -20,11 +20,11 @@ Refined:   code + analyzers → logical slice → program representation
 
 **Current characterization:**
 
-> Conceptually mature, architecturally coherent — still in need of one consolidation pass for boundary precision, then pressure-testing against representative bug classes.
+> Architecture is coherent and the first two real verification strategies are operational. The next phase is a real language frontend and pressure-testing the remaining representative bug classes.
 
-Implementation scaffolding reflects the refined architecture. What remains is not reinvention but **making abstractions as precise in code as they are in the design**, then proving representative bugs express cleanly through them.
+Implementation scaffolding reflects the refined architecture. The abstractions are now precise in code as well as design for the two implemented domains (call ordering, field reachability). What remains is not reinvention but **connecting real program data** and validating the remaining bug classes.
 
-At this stage, adding correctness domains (concurrency, taint, temporal logic, …) is **less valuable** than validating the current abstractions against real bug classes.
+Adding correctness domains (concurrency, taint, temporal logic, …) is **less valuable** than validating current abstractions against real bug classes.
 
 ---
 
@@ -42,7 +42,7 @@ Detectors (verification strategies)  →  Evidence Refinement (capability)
                                        Evidence API (interface)
 ```
 
-**Implemented now** (stub-level for heavy analysis work):
+**Implemented (non-stub):**
 
 - Domain models for **CorrectnessProperty**, **AnalysisRequest**, **RefinementResult**
 - **PropertyAPI** + seed catalog + **StubPropertyAPI**
@@ -51,8 +51,22 @@ Detectors (verification strategies)  →  Evidence Refinement (capability)
 - **DetectorContext** is property-aware; registry binds properties per detector
 - **AnalysisOrchestrator** runs: properties → detectors → refine-until-done → LLM
 - SQLite **`properties`** table + **PropertyStore** (schema v2 migration)
+- **`EpistemicStatus`** enum — certainty dimension, separate from `ProvenanceKind`
+- **`Provenance`** model — `epistemic_status` field with `@model_validator` auto-populating from `kind`; `is_high_confidence` property
+- **`ProvenancedFact.is_authoritative_structure()`** — checks `epistemic_status`, excludes `HYPOTHESIZED` and `INFERRED`
+- **`MissingCallDetector`** — first real verification strategy; evaluates `ORDERING` properties via call graph BFS; emits `PROVEN` / `VIOLATED` / `UNKNOWN`
+- **`FieldReachabilityDetector`** — second real verification strategy; evaluates `REACHABILITY` properties via data-flow graph BFS; emits `PROVEN` / `VIOLATED` / `UNKNOWN`
+- **`ProgramModelEvidenceAPI`** — real `get_data_flow()` (BFS, capped at 10 paths) and `node_in_data_flow()` helper
+- **`ResourceLifecycleDetector`** — third real verification strategy; evaluates `RESOURCE` properties via call graph reachability; emits `PROVEN` / `VIOLATED` / `UNKNOWN`; VIOLATED carries `ERROR` severity
+- **`InMemoryProgramModel`** — accepts injected `DataFlowGraph`; `data_flow()` returns the real graph instead of an empty one
+- **`AnalysisOrchestrator.resolve_slice()`** — public convenience delegating to `scope.propose` + `scope.approve`
+- **Detector registry** — `detector_id → class` map; `MissingCallDetector` and `FieldReachabilityDetector` registered; remaining IDs fall back to `StubDetector`
+- **`MypyAdapter`** — real analyzer adapter; shells out to `mypy --output json --no-error-summary`; parses newline-delimited JSON; maps severity; generates UUID per diagnostic; preserves `raw_diagnostic`
+- **`FlutterAnalyzeAdapter`** — real analyzer adapter; runs `flutter analyze` (no JSON mode — plain-text parsed); `_extract_issue_blocks` collapses wrapped lines; bullet-separated format `severity • message • file:line:col • rule_id`; `hint`/`info` → `Severity.INFO`, `lint` → `Severity.WARNING`
 
-Prior scaffold remains (domain models, Evidence API ABC, scope pipeline, analyzer adapters, persistence stores, CLI) but is not yet backed by real program analysis.
+**96 tests passing.**
+
+Prior scaffold remains (Evidence API ABC, scope pipeline, analyzer adapters, persistence stores, CLI) but is not yet backed by real program analysis.
 
 ---
 
@@ -62,31 +76,18 @@ The design organizes components by **kind**, not as a strict pipeline. Conceptua
 
 | Component | Kind | Package | Status |
 | --------- | ---- | ------- | ------ |
-| Codebase & external inputs | Input sources | `analyzers/`, `repository/` | Adapters stubbed; no execution |
+| Codebase & external inputs | Input sources | `analyzers/`, `repository/` | `MypyAdapter` ✓ real; `FlutterAnalyzeAdapter` ✓ real; remaining adapters stubbed |
 | Logical slice | Persistent object | `scope/` | Hybrid pipeline works; expansion stubbed |
-| Program representation | Data model | `program/` | Graph classes + ABCs; no frontend |
-| Analysis substrate | Computational machinery | `analysis/` | ABC + stub; no real facts |
-| Evidence API | **Interface (central boundary)** | `evidence/api.py` | Full ABC; stub backend |
-| Properties / contracts | **Declarative specifications** | `properties/` | API + catalog + persistence |
-| Detectors | Verification strategies | `detectors/` | Property-aware; no real evaluations yet |
+| Program representation | Data model | `program/` | Graph classes + ABCs; no language frontend |
+| Analysis substrate | Computational machinery | `analysis/` | ABC + stub; no real derived facts |
+| Evidence API | **Interface (central boundary)** | `evidence/api.py` | Full ABC; `ProgramModelEvidenceAPI` backend for call graph + data flow |
+| Properties / contracts | **Declarative specifications** | `properties/` | API + catalog + persistence; two operative properties |
+| Detectors | Verification strategies | `detectors/` | Three real strategies (`MissingCallDetector`, `FieldReachabilityDetector`, `ResourceLifecycleDetector`); rest stubbed |
 | Evidence refinement | **Capability / feedback loop** | `evidence/refiner.py` | Loop wired; minimal collection |
 | Minimal evidence slice | Artifact | `evidence/collector.py` | Collector exists; not finding-specific yet |
 | Documentation | Dual-role input | `documentation/` | ABC + stub; intent role only in pipeline |
 | LLM | Semantic interpreter | `llm/` | ABC + stub judgment |
-| Findings & analysis records | Outputs / artifacts | `persistence/`, `pipeline/` | Stores write slices/analyses/properties |
-
-**What refined well in design (now reflected in code structure):**
-
-- Logical slice as persistent semantic boundary, not file picking
-- Program representation as data model, not a pipeline stage
-- Analysis substrate absorbing algorithms as fact-producing machinery
-- Evidence API as the central query boundary
-- Properties replacing vague "bug finding"
-- Detectors as evidence consumers, not independent analysis engines
-- Evidence refinement as iterative capability, not one-pass graph narrowing
-- Documentation promoted to correctness input (partially wired)
-- LLM repositioned as semantic interpreter
-- Persistence and named slices as first-class artifacts
+| Findings & analysis records | Outputs / artifacts | `persistence/`, `pipeline/` | Stores write slices/analyses/properties/findings |
 
 ---
 
@@ -98,11 +99,11 @@ The architecture is sound. These **boundary precision** items are documented in 
 | -------- | ------------- | ---------- |
 | **Properties** | Declarative obligations only; never query graphs or produce findings | `CorrectnessProperty` model + catalog; detectors do the work ✓ |
 | **Evidence refinement** | Iterative capability; loops through substrate | Orchestrator + refiner loop wired ✓ |
-| **Verification outcomes** | First-class `PROVEN` / `VIOLATED` / `UNKNOWN` | `VerificationOutcome` on `Finding`; persisted ✓ |
-| **Provenance vs epistemic status** | Separate origin from certainty | `ProvenanceKind` conflates both (legacy); needs split |
-| **Documentation roles** | Scope establishment + intended behavior | Scope role not wired in pipeline; intent associated during refinement only |
-| **Detectors vs properties** | Detectors as verification strategies for properties | Property-aware context ✓; explicit strategy model deferred |
-| **Taxonomy** | Components are different kinds of things | Docs updated; avoid "Layer N" in new code/comments |
+| **Verification outcomes** | First-class `PROVEN` / `VIOLATED` / `UNKNOWN` | `VerificationOutcome` on `Finding`; both detectors emit real outcomes ✓ |
+| **Provenance vs epistemic status** | Separate origin from certainty | Split done — `ProvenanceKind` (origin) and `EpistemicStatus` (certainty) are separate fields; `@model_validator` keeps backward compat ✓ |
+| **Documentation roles** | Scope establishment + intended behavior | Scope role not yet wired in pipeline; intent associated during refinement only |
+| **Detectors vs properties** | Detectors as verification strategies for properties | Property-aware context ✓; two real strategies implemented ✓ |
+| **Taxonomy** | Components are different kinds of things | Docs updated; "Layer N" language avoided in new code ✓ |
 
 ---
 
@@ -113,6 +114,10 @@ The architecture is sound. These **boundary precision** items are documented in 
 - **Persistence** — projects, snapshots, slices, analyses, findings, evidence, properties
 - **Orchestrator** — end-to-end run loads properties, runs detectors, refines evidence, persists
 - **CLI** — `init`, `status`, `scope`, `analyze`, `detectors`, `analyzers`
+- **MissingCallDetector** — evaluates `ORDERING` properties; emits `PROVEN` / `VIOLATED` / `UNKNOWN`
+- **FieldReachabilityDetector** — evaluates `REACHABILITY` properties; emits `PROVEN` / `VIOLATED` / `UNKNOWN`
+- **ResourceLifecycleDetector** — evaluates `RESOURCE` properties; emits `PROVEN` / `VIOLATED` / `UNKNOWN`; VIOLATED at ERROR severity
+- **Provenance / EpistemicStatus split** — origin and certainty are separate fields, both tested
 
 Run verification:
 
@@ -126,16 +131,15 @@ pytest && mypy --strict && ruff check .
 
 | Component | Behavior |
 | --------- | -------- |
-| Language frontends / ProgramModel | ABC only |
+| Language frontends / ProgramModel | ABC only; no AST or bytecode parser |
 | AnalysisSubstrate | Accepts requests; returns no derived facts |
-| Evidence API backend | All queries empty |
-| Property catalog | Fixed seed properties; heuristic by slice name |
-| Detectors | Declare evidence needs; return no findings |
+| Evidence API — field, CFG, path-condition queries | Return empty; only call graph + data flow are real |
+| Property catalog | Fixed seed properties; matched heuristically by slice name |
+| Remaining detectors (resource lifecycle, etc.) | Declare evidence needs; return no findings |
 | Evidence refiner | Maps requirements → queries; requests analysis when data missing |
-| Analyzer adapters | `discover()` false; `analyze` raises |
+| Analyzer adapters | `MypyAdapter` ✓ (shells out to `mypy`); `FlutterAnalyzeAdapter` ✓ (plain-text parser); remaining adapters: `discover()` false, `analyze` raises |
 | LLM judgment | `INSUFFICIENT_EVIDENCE` |
 | Scope expansion | Passthrough stub resolver |
-| Verification outcomes | Enum + finding field; detectors don't emit yet |
 
 ---
 
@@ -143,14 +147,12 @@ pytest && mypy --strict && ruff check .
 
 Priority follows the design: **pressure-test architecture before expanding domains**.
 
-1. **Substrate ↔ Evidence API not connected** — bridge wired via `apply_facts` + `ProgramModelEvidenceAPI`; orchestrator still uses stub backend by default.
-2. **No real program representation** — `InMemoryProgramModel` + call-graph evidence backend exist for tests; no language frontend yet.
-3. **No real verification strategies** — property binding exists but no detector evaluates properties → `PROVEN`/`VIOLATED`/`UNKNOWN`.
-4. **No analyzer execution** — external diagnostics never enter evidence.
-5. **Verification outcomes not first-class** — enum + finding field done; detectors do not emit outcomes yet.
-6. **Provenance / epistemic status not separated** — legacy `ProvenanceKind` mixes origin and certainty.
-7. **Documentation scope role unused** — pipeline uses documentation for intent only, not slice establishment.
-8. Incremental analysis, detector composition, new analysis domains — unstarted (by design).
+1. **No real language frontend** — `InMemoryProgramModel` works for tests with injected graphs; no AST parser or call-graph extractor yet. Highest-value next step.
+2. **Substrate ↔ Evidence API not connected in production** — `apply_facts` + `ProgramModelEvidenceAPI` exist and are tested; orchestrator uses an empty builder by default. Wiring a real builder closes this.
+3. **No analyzer execution** — external diagnostics never enter evidence; `MypyAdapter` and `FlutterAnalyzeAdapter` now real but not yet wired into the evidence pipeline.
+4. **Documentation scope role unused** — pipeline uses documentation for intent only, not slice establishment.
+5. **Remaining bug classes not expressed** — authentication bypass and doc contradiction are not yet modelled as properties + detectors.
+6. Incremental analysis, detector composition, new analysis domains — unstarted (by design; lower priority than validating current abstractions).
 
 ---
 
@@ -161,40 +163,39 @@ Priority follows the design: **pressure-test architecture before expanding domai
 Representative bug classes to express **without special-case pipeline stages**:
 
 ```text
-Missing workflow operation (reserve before persist)
-Dropped field failing to reach consumer
-Resource acquired but not released on all paths
-Authentication bypass via reachable path
-Implementation contradicting documented invariant
+✓ Missing workflow operation (reserve before persist)     → MissingCallDetector / ORDERING
+✓ Dropped field failing to reach consumer                 → FieldReachabilityDetector / REACHABILITY
+✓ Resource acquired but not released on all paths         → ResourceLifecycleDetector / RESOURCE
+  Authentication bypass via reachable path                → needs AuthBypassDetector / REACHABILITY
+  Implementation contradicting documented invariant       → needs doc-comparison + LLM
 ```
 
-Each should decompose to: **property + Evidence API queries + refinement + minimal slice**.
+Each decomposes to: **property + Evidence API queries + refinement + minimal slice**.
 
 ### Immediate
 
 - [x] Add **VerificationOutcome** (`PROVEN` / `VIOLATED` / `UNKNOWN`) to domain + findings
-- [x] Implement minimal `ProgramModel` + Evidence API backend over call graph
+- [x] Implement minimal `ProgramModel` + Evidence API backend over call graph + data flow
 - [x] Bridge **analysis substrate → Evidence API** (`apply_facts` in refiner loop)
-- [ ] Wire bridge into orchestrator with real program data
-
-### First real verification strategy
-
-- [ ] Implement `possible_missing_call` against `RESERVE_BEFORE_PERSIST` using only Evidence API
-- [ ] Finding carries `property_id` + verification outcome; refiner builds minimal slice from call path + doc invariant
-- [ ] Use this as the first architecture pressure-test (missing workflow operation)
+- [x] **EpistemicStatus** split from `ProvenanceKind` — origin and certainty separated
+- [x] First real verification strategy — `MissingCallDetector` + `RESERVE_BEFORE_PERSIST`
+- [x] Second real verification strategy — `FieldReachabilityDetector` + `REQUIRED_FIELD_REACHES_CONSUMER`
+- [ ] Real language frontend for first target ecosystem (call-graph + data-flow extraction)
+- [ ] Wire `ProgramModelBuilder` into orchestrator so real program data flows end-to-end
 
 ### Consolidation hygiene
 
-- [ ] Begin separating provenance (origin) from epistemic status in domain models
+- [x] Provenance (origin) and epistemic status (certainty) separated in domain models
 - [ ] Wire documentation scope role into slice resolution where appropriate
 - [ ] Keep pytest / mypy / ruff green
 - [ ] New subsystems must go through Evidence API and Property API — no bypass
 
-### Phase continuation (after first pressure-test passes)
+### Phase continuation (after second pressure-test passes)
 
+- [x] `ResourceLifecycleDetector` for `RESOURCE` properties (third bug class)
 - [ ] Language frontend for first target ecosystem
 - [ ] One working analyzer adapter (`normalize` + persist diagnostics)
-- [ ] Second representative bug class through same abstractions
+- [ ] Fourth + fifth representative bug class (auth bypass, doc contradiction)
 
 ### Doc hygiene
 
@@ -209,19 +210,37 @@ Each should decompose to: **property + Evidence API queries + refinement + minim
 ```text
 src/codeanalyzer/
 ├── analysis/
-│   ├── program_model.py   # Substrate over in-memory call graph
-│   └── substrate.py
+│   ├── program_model.py      # ProgramModelAnalysisSubstrate
+│   └── substrate.py          # AnalysisSubstrate ABC + StubAnalysisSubstrate
 ├── program/
-│   └── in_memory.py       # Minimal ProgramModel implementation
+│   ├── in_memory.py          # InMemoryProgramModel (injected call graph + data flow)
+│   └── graphs/
+│       ├── call_graph.py     # CallGraph + BFS reachability
+│       ├── cfg.py            # ControlFlowGraph
+│       └── data_flow.py      # DataFlowGraph + DataFlowEdge
 ├── evidence/
-│   ├── program_model.py   # Call-graph Evidence API + apply_facts
-│   └── refiner.py         # Applies substrate facts between rounds
+│   ├── api.py                # EvidenceAPI ABC (central boundary)
+│   ├── program_model.py      # ProgramModelEvidenceAPI — call graph + data-flow BFS
+│   └── refiner.py            # StubEvidenceRefiner — iterative refinement loop
+├── detectors/
+│   ├── base.py               # Detector ABC, DetectorContext, DetectorRegistry
+│   ├── catalog.py            # INITIAL_DETECTOR_IDS
+│   ├── registry.py           # build_detectors() — real + stub mapping
+│   ├── missing_call.py       # MissingCallDetector (ORDERING → PROVEN/VIOLATED/UNKNOWN)
+│   ├── field_reachability.py # FieldReachabilityDetector (REACHABILITY → PROVEN/VIOLATED/UNKNOWN)
+│   ├── resource_lifecycle.py # ResourceLifecycleDetector (RESOURCE → PROVEN/VIOLATED/UNKNOWN)
+│   └── stubs.py              # StubDetector
 ├── properties/
+│   ├── catalog.py            # RESERVE_BEFORE_PERSIST, REQUIRED_FIELD_REACHES_CONSUMER, …
+│   └── stub.py               # StubPropertyAPI (heuristic slice matching)
 ├── domain/
-│   ├── properties.py
-│   └── analysis.py
-├── detectors/base.py
-└── pipeline/orchestrator.py
+│   ├── enums.py              # EpistemicStatus, VerificationOutcome, PropertyKind, …
+│   ├── provenance.py         # Provenance (kind + epistemic_status), ProvenancedFact
+│   ├── properties.py         # CorrectnessProperty
+│   ├── findings.py           # Finding
+│   └── analysis.py           # AnalysisRun, AnalysisRequest, RefinementResult
+└── pipeline/
+    └── orchestrator.py       # AnalysisOrchestrator, AnalysisResult
 ```
 
 ---

@@ -17,11 +17,14 @@ from codeanalyzer.analysis.program_model import ProgramModelAnalysisSubstrate
 from codeanalyzer.analyzers.adapters import (
     ESLintAdapter,
     FlutterAnalyzeAdapter,
+    MypyAdapter,
     PHPStanAdapter,
     TypeScriptAdapter,
 )
+from codeanalyzer.analyzers.discovery import negotiate_tools
 from codeanalyzer.analyzers.registry import AnalyzerRegistry
 from codeanalyzer.config.settings import Settings
+from codeanalyzer.domain.tooling import ToolStatus, tool_statuses_to_metadata
 from codeanalyzer.detectors.base import DetectorContext, DetectorRegistry
 from codeanalyzer.detectors.registry import build_detectors
 from codeanalyzer.documentation.stub import StubDocumentationAPI
@@ -76,6 +79,7 @@ class AnalysisOrchestrator:
         )
         self.analyzers = AnalyzerRegistry()
         for adapter_cls in (
+            MypyAdapter,
             FlutterAnalyzeAdapter,
             ESLintAdapter,
             PHPStanAdapter,
@@ -129,6 +133,26 @@ class AnalysisOrchestrator:
             return None
         return self.scope.approve(snapshot, proposal)
 
+    def negotiate_tools(
+        self,
+        *,
+        project_path: str,
+    ) -> list[ToolStatus]:
+        """Negotiation phase: detect expected tools, probe availability, and classify failures.
+
+        This implements the tool intelligence negotiation phase before running analysis.
+        It:
+        1. Detects expected tools from project manifests (pubspec, package.json, etc.)
+        2. Probes all registered adapters for availability and version
+        3. Classifies failures (NOT_INSTALLED, TIMEOUT, etc.)
+        4. Returns ToolStatus objects for integration into evidence API and metadata
+
+        Returns:
+            List of ToolStatus objects for all probed adapters
+        """
+        all_adapters = self.analyzers.all()
+        return negotiate_tools(all_adapters, project_path)
+
     def run(
         self,
         project: Project,
@@ -138,9 +162,19 @@ class AnalysisOrchestrator:
         """Execute a full analysis run for *slice_* against *snapshot*."""
         self._ensure_stores(project.path)
 
+        # Negotiation phase: probe tool availability and classify failures
+        tool_statuses = self.negotiate_tools(project_path=project.path)
+        
+        # Freeze tool state into analysis metadata for reproducibility
+        tool_metadata = tool_statuses_to_metadata(tool_statuses)
+
         # Build program model and wire real evidence + substrate for this run
         program_model = self._program_model_builder(snapshot, slice_)
         evidence_api = ProgramModelEvidenceAPI(program_model)
+        
+        # Register tool statuses with evidence API for capability queries
+        evidence_api.set_tool_statuses(tool_statuses)
+        
         substrate = ProgramModelAnalysisSubstrate(program_model)
         refiner = StubEvidenceRefiner(
             evidence_api,
@@ -153,6 +187,7 @@ class AnalysisOrchestrator:
             slice_id=slice_.id,
             snapshot_id=snapshot.id,
             status=AnalysisStatus.RUNNING,
+            metadata=tool_metadata,  # Freeze tool state into metadata
         )
         self._persist_analysis(analysis)
 
@@ -160,7 +195,16 @@ class AnalysisOrchestrator:
         self._persist_properties(properties)
 
         diagnostics: list[ExternalDiagnostic] = []
-        for adapter in self.analyzers.discover_available():
+        # Only run adapters that are usable based on negotiation phase
+        usable_adapters = [
+            adapter for adapter in self.analyzers.all()
+            if any(
+                status.analyzer_id == adapter.capabilities().analyzer_id and status.is_usable()
+                for status in tool_statuses
+            )
+        ]
+        
+        for adapter in usable_adapters:
             try:
                 diagnostics.extend(
                     adapter.analyze(snapshot, slice_, project_path=project.path)

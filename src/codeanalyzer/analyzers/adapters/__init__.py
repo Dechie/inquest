@@ -7,12 +7,14 @@ follow without changing the core architecture.
 from codeanalyzer.analyzers.adapters.base_stub import StubAnalyzerAdapter
 from codeanalyzer.analyzers.adapters.eslint import ESLintAdapter
 from codeanalyzer.analyzers.adapters.flutter_analyze import FlutterAnalyzeAdapter
+from codeanalyzer.analyzers.adapters.mypy import MypyAdapter
 from codeanalyzer.analyzers.adapters.phpstan import PHPStanAdapter
 from codeanalyzer.analyzers.adapters.typescript import TypeScriptAdapter
 
 __all__ = [
     "ESLintAdapter",
     "FlutterAnalyzeAdapter",
+    "MypyAdapter",
     "PHPStanAdapter",
     "StubAnalyzerAdapter",
     "TypeScriptAdapter",

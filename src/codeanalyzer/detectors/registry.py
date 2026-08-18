@@ -10,12 +10,14 @@ from codeanalyzer.detectors.base import Detector
 from codeanalyzer.detectors.catalog import INITIAL_DETECTOR_IDS
 from codeanalyzer.detectors.field_reachability import FieldReachabilityDetector
 from codeanalyzer.detectors.missing_call import MissingCallDetector
+from codeanalyzer.detectors.resource_lifecycle import ResourceLifecycleDetector
 from codeanalyzer.detectors.stubs import StubDetector
 
 # Map detector_id → concrete class for all real implementations.
 _REAL_DETECTORS: dict[str, type[Detector]] = {
     "possible_missing_call": MissingCallDetector,
     "missing_field_propagation": FieldReachabilityDetector,
+    "resource_lifecycle_violation": ResourceLifecycleDetector,
 }
 
 

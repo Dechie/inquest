@@ -28,11 +28,21 @@ from codeanalyzer.domain.properties import CorrectnessProperty
 from codeanalyzer.domain.provenance import Provenance, ProvenancedFact
 from codeanalyzer.domain.slices import LogicalSlice, SliceMember
 from codeanalyzer.domain.snapshots import AnalysisRun, Project, Snapshot
+from codeanalyzer.domain.tooling import (
+    AcquisitionMode,
+    CapabilityKind,
+    StructuralArtifact,
+    ToolCapabilityState,
+    ToolFailure,
+    ToolStatus,
+)
 
 __all__ = [
+    "AcquisitionMode",
     "AnalysisKind",
     "AnalysisRequest",
     "AnalysisRun",
+    "CapabilityKind",
     "CorrectnessProperty",
     "Entity",
     "EntityType",
@@ -59,6 +69,10 @@ __all__ = [
     "Severity",
     "SliceMember",
     "Snapshot",
+    "StructuralArtifact",
     "SubstrateRunResult",
+    "ToolCapabilityState",
+    "ToolFailure",
+    "ToolStatus",
     "VerificationOutcome",
 ]

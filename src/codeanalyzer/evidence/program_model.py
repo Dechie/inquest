@@ -8,6 +8,7 @@ from codeanalyzer.domain.diagnostics import ExternalDiagnostic
 from codeanalyzer.domain.entities import Entity, Relationship
 from codeanalyzer.domain.provenance import ProvenancedFact
 from codeanalyzer.domain.slices import LogicalSlice
+from codeanalyzer.domain.tooling import ToolStatus
 from codeanalyzer.evidence.api import EvidenceAPI
 from codeanalyzer.program.algorithms.reachability import find_path
 from codeanalyzer.program.in_memory import InMemoryProgramModel
@@ -20,6 +21,7 @@ class ProgramModelEvidenceAPI(EvidenceAPI):
         self._model = model
         self._path_cache: dict[tuple[str, str], list[str]] = {}
         self._reachability_cache: dict[tuple[str, str], bool] = {}
+        self._tool_statuses: dict[str, ToolStatus] = {}
 
     @property
     def model(self) -> InMemoryProgramModel | None:
@@ -36,6 +38,11 @@ class ProgramModelEvidenceAPI(EvidenceAPI):
                 self._path_cache[(source_id, target_id)] = list(fact.entity_ids)
             elif fact.statement.startswith("reachability:"):
                 self._reachability_cache[(source_id, target_id)] = True
+
+    def set_tool_statuses(self, statuses: list[ToolStatus]) -> None:
+        """Register tool status information from the negotiation phase."""
+        for status in statuses:
+            self._tool_statuses[status.analyzer_id] = status
 
     def get_entity(self, entity_id: str) -> Entity | None:
         if self._model is None:
@@ -224,4 +231,16 @@ class ProgramModelEvidenceAPI(EvidenceAPI):
         return None
 
     def get_analyzer_capabilities(self, analyzer_id: str) -> dict[str, Any] | None:
-        return None
+        """Return analyzer capabilities based on tool status from negotiation phase."""
+        status = self._tool_statuses.get(analyzer_id)
+        if status is None:
+            return None
+        return {
+            "analyzer_id": status.analyzer_id,
+            "executable": status.executable,
+            "version": status.version,
+            "project_requirement": status.project_requirement,
+            "capabilities": {kind.value: state.value for kind, state in status.capabilities.items()},
+            "failure": status.failure.value if status.failure else None,
+            "is_usable": status.is_usable(),
+        }

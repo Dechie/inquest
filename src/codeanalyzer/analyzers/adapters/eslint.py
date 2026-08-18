@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from codeanalyzer.analyzers.adapters.base_stub import StubAnalyzerAdapter
+from codeanalyzer.domain.tooling import AcquisitionMode, CapabilityKind
 
 
 class ESLintAdapter(StubAnalyzerAdapter):
@@ -11,10 +12,10 @@ class ESLintAdapter(StubAnalyzerAdapter):
             analyzer_id="eslint",
             display_name="ESLint",
             languages=["javascript", "typescript"],
-            provides=[
-                "JavaScript/TypeScript lint diagnostics",
-                "AST-based rules",
-                "plugin diagnostics",
-            ],
+            capabilities={
+                CapabilityKind.DIAGNOSTICS: AcquisitionMode.PROTOCOL,
+                CapabilityKind.AST: AcquisitionMode.LIBRARY_API,
+                CapabilityKind.SYMBOLS: AcquisitionMode.LIBRARY_API,
+            },
             binary_name="eslint",
         )

@@ -40,7 +40,12 @@ RESOURCE_MUST_BE_RELEASED = CorrectnessProperty(
     kind=PropertyKind.RESOURCE,
     statement="Every acquired resource must be released",
     source=PropertySource.DETECTOR_RULE,
+    provenance=Provenance(
+        kind=ProvenanceKind.DOCUMENTATION_FACT,
+        source="docs/resources.md",
+    ),
     detector_ids=["resource_lifecycle_violation"],
+    scope_entity_ids=["ResourceManager.acquire", "ResourceManager.release"],
 )
 
 CATALOG: list[CorrectnessProperty] = [
@@ -56,7 +61,7 @@ def catalog_for_slice(slice_name: str) -> list[CorrectnessProperty]:
     selected: list[CorrectnessProperty] = []
     if any(token in name for token in ("checkout", "order", "persist", "reserve")):
         selected.extend([RESERVE_BEFORE_PERSIST, REQUIRED_FIELD_REACHES_CONSUMER])
-    if any(token in name for token in ("resource", "io", "file", "connection")):
+    if any(token in name for token in ("resource", "io", "file", "connection", "acquire", "release")):
         selected.append(RESOURCE_MUST_BE_RELEASED)
     if not selected:
         selected = list(CATALOG)

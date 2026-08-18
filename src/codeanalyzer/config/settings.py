@@ -32,6 +32,8 @@ class Settings(BaseModel):
     max_evidence_items: int = Field(default=50, ge=1)
     auto_approve_scope: bool = False
     languages: list[str] = Field(default_factory=_default_languages)
+    discover_timeout_seconds: int = Field(default=30, ge=1)
+    analyze_timeout_seconds: int = Field(default=120, ge=1)
 
     @classmethod
     def from_environ(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -52,6 +54,10 @@ class Settings(BaseModel):
             kwargs["auto_approve_scope"] = _env_bool(value)
         if value := env.get("CODEANALYZER_LANGUAGES"):
             kwargs["languages"] = [part.strip() for part in value.split(",") if part.strip()]
+        if value := env.get("CODEANALYZER_DISCOVER_TIMEOUT"):
+            kwargs["discover_timeout_seconds"] = int(value)
+        if value := env.get("CODEANALYZER_ANALYZE_TIMEOUT"):
+            kwargs["analyze_timeout_seconds"] = int(value)
         return cls.model_validate(kwargs)
 
     def with_cli_overrides(

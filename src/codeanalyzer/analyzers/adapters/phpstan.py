@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from codeanalyzer.analyzers.adapters.base_stub import StubAnalyzerAdapter
+from codeanalyzer.domain.tooling import AcquisitionMode, CapabilityKind
 
 
 class PHPStanAdapter(StubAnalyzerAdapter):
@@ -11,10 +12,10 @@ class PHPStanAdapter(StubAnalyzerAdapter):
             analyzer_id="phpstan",
             display_name="PHPStan",
             languages=["php"],
-            provides=[
-                "static analysis diagnostics",
-                "type inference issues",
-                "undefined property/method checks",
-            ],
+            capabilities={
+                CapabilityKind.DIAGNOSTICS: AcquisitionMode.CLI_STRUCTURED,
+                CapabilityKind.TYPES: AcquisitionMode.CLI_STRUCTURED,
+                CapabilityKind.CFG: AcquisitionMode.CLI_STRUCTURED,
+            },
             binary_name="phpstan",
         )

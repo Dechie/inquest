@@ -1,26 +1,25 @@
-"""Flutter Analyze adapter — real implementation.
+"""Mypy adapter — real implementation.
 
-Shells out to ``flutter analyze`` and normalizes its plain-text output
-into canonical ``ExternalDiagnostic`` objects.
+Shells out to ``mypy --output json`` and normalizes each JSON diagnostic
+line into a canonical ``ExternalDiagnostic``.
 
-Output format (one logical issue, may wrap across lines):
-
-    {severity} • {message} • {file}:{line}:{col} • {rule_id}
-
-Severity tokens: error, warning, info, hint, lint.
-Long messages wrap onto continuation lines (leading whitespace).
-Header (``Analyzing …``) and footer (``N issues found.``) are ignored.
-
-Flags used:
-  --no-congratulate   suppress "No issues found" when project is clean
-  --no-pub            skip pub-get (caller's responsibility)
-  --no-fatal-infos    exit code only reflects actual errors
-  --no-fatal-warnings exit code only reflects actual errors
+Mypy JSON line schema (one object per line on stdout):
+    {
+      "file":       "<path>",
+      "line":       <int>,
+      "column":     <int>,
+      "end_line":   <int>,
+      "end_column": <int>,
+      "message":    "<str>",
+      "hint":       "<str> | null",
+      "code":       "<rule-id>",
+      "severity":   "error" | "warning" | "note"
+    }
 """
 
 from __future__ import annotations
 
-import re
+import json
 import shutil
 import subprocess
 import uuid
@@ -41,40 +40,45 @@ from codeanalyzer.domain.tooling import (
     ToolStatus,
 )
 
-_BULLET = "•"
-
+# Map mypy severity strings to our canonical Severity enum.
 _SEVERITY_MAP: dict[str, Severity] = {
     "error": Severity.ERROR,
     "warning": Severity.WARNING,
-    "info": Severity.INFO,
-    "hint": Severity.INFO,
-    "lint": Severity.WARNING,
+    "note": Severity.INFO,
 }
 
-# lib/foo/bar.dart:42:7
-_LOCATION_RE = re.compile(r"^(.+):(\d+):(\d+)$")
 
-# Strip flutter's spinner/backspace animation characters
-_SPINNER_RE = re.compile(r"[\x08\u2800-\u28ff]")
+class MypyAdapter(AnalyzerAdapter):
+    """Run mypy against a Python project and normalize its diagnostics.
 
+    ``discover()`` checks that ``mypy`` is available on PATH (or the
+    executable path supplied at construction time).  ``analyze()`` shells
+    out to mypy with ``--output json --no-error-summary`` and parses each
+    output line; ``normalize()`` converts raw dicts to
+    ``ExternalDiagnostic`` objects.
+    """
 
-class FlutterAnalyzeAdapter(AnalyzerAdapter):
-    """Run ``flutter analyze`` and normalize its plain-text diagnostics."""
+    ANALYZER_ID = "mypy"
 
-    ANALYZER_ID = "flutter_analyze"
-
-    def __init__(self, *, executable: str = "flutter") -> None:
+    def __init__(self, *, executable: str = "mypy") -> None:
         self._executable = executable
         self._version: str | None = None
 
+    # ------------------------------------------------------------------
+    # AnalyzerAdapter protocol
+    # ------------------------------------------------------------------
+
     def discover(self) -> bool:
+        """Return True if the mypy binary is reachable."""
         resolved = shutil.which(self._executable)
         if resolved is None:
             return False
         try:
             result = subprocess.run(
                 [resolved, "--version"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0:
                 self._version = result.stdout.strip().split("\n")[0]
@@ -105,7 +109,7 @@ class FlutterAnalyzeAdapter(AnalyzerAdapter):
                 [resolved, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=10,
             )
             if result.returncode == 0:
                 version = result.stdout.strip().split("\n")[0]
@@ -113,7 +117,7 @@ class FlutterAnalyzeAdapter(AnalyzerAdapter):
                 self._executable = resolved
                 
                 # Check if project path is valid
-                if project_path and not (Path(project_path) / "pubspec.yaml").exists():
+                if project_path and not _has_python_files(project_path):
                     return ToolStatus(
                         analyzer_id=caps.analyzer_id,
                         executable=resolved,
@@ -164,23 +168,24 @@ class FlutterAnalyzeAdapter(AnalyzerAdapter):
     def supports(
         self, *, language: str | None = None, project_path: str | None = None
     ) -> bool:
+        """True for Python projects or when language is ``"python"``."""
         if language is not None:
-            return language.lower() in ("dart", "flutter")
+            return language.lower() == "python"
         if project_path is not None:
-            return (Path(project_path) / "pubspec.yaml").exists()
+            return _has_python_files(project_path)
         return False
 
     def capabilities(self) -> AnalyzerCapabilities:
         return AnalyzerCapabilities(
             analyzer_id=self.ANALYZER_ID,
-            display_name="Flutter Analyze",
-            languages=["dart"],
+            display_name="mypy",
+            languages=["python"],
             capabilities={
-                CapabilityKind.DIAGNOSTICS: AcquisitionMode.CLI_TEXTUAL,
-                CapabilityKind.TYPES: AcquisitionMode.CLI_TEXTUAL,
-                CapabilityKind.SYMBOLS: AcquisitionMode.CLI_TEXTUAL,
+                CapabilityKind.DIAGNOSTICS: AcquisitionMode.CLI_STRUCTURED,
+                CapabilityKind.TYPES: AcquisitionMode.CLI_STRUCTURED,
+                CapabilityKind.SYMBOLS: AcquisitionMode.CLI_STRUCTURED,
             },
-            version_command="flutter --version",
+            version_command="mypy --version",
         )
 
     def analyze(
@@ -190,117 +195,101 @@ class FlutterAnalyzeAdapter(AnalyzerAdapter):
         *,
         project_path: str,
     ) -> list[ExternalDiagnostic]:
+        """Run mypy and return normalized diagnostics."""
         resolved = shutil.which(self._executable)
         if resolved is None:
             raise RuntimeError(
-                f"flutter not found at '{self._executable}'. "
+                f"mypy not found at '{self._executable}'. "
                 "Run discover() before analyze()."
             )
-        cmd = [
-            resolved, "analyze",
-            "--no-congratulate",
-            "--no-pub",
-            "--no-fatal-infos",
-            "--no-fatal-warnings",
-        ]
+        cmd = [resolved, "--output", "json", "--no-error-summary", project_path]
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=120, cwd=project_path,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=project_path,
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
-                f"flutter analyze timed out in '{project_path}'"
+                f"mypy timed out analyzing '{project_path}'"
             ) from exc
-        return self.normalize(result.stdout + result.stderr, snapshot=snapshot)
+        return self.normalize(_parse_json_lines(result.stdout), snapshot=snapshot)
 
     def normalize(
         self, raw_output: Any, *, snapshot: Snapshot
     ) -> list[ExternalDiagnostic]:
-        if not isinstance(raw_output, str):
-            return []
+        """Convert raw mypy JSON dicts into ``ExternalDiagnostic`` objects.
+
+        Accepts either a list of dicts (from ``_parse_json_lines``) or a
+        raw newline-delimited JSON string.
+        """
+        if isinstance(raw_output, str):
+            raw_output = _parse_json_lines(raw_output)
+
         diagnostics: list[ExternalDiagnostic] = []
-        for raw_issue in _extract_issue_blocks(raw_output):
-            parts = [p.strip() for p in raw_issue.split(_BULLET)]
-            if len(parts) < 4:
+        version = self._version
+
+        for item in raw_output:
+            if not isinstance(item, dict):
                 continue
-            severity_str = parts[0].lower()
-            message = parts[1]
-            location_str = parts[2]
-            rule_id = parts[3] or None
-            severity = _SEVERITY_MAP.get(severity_str, Severity.WARNING)
-            location = _parse_location(location_str)
+
+            severity = _SEVERITY_MAP.get(item.get("severity", "error"), Severity.WARNING)
+            rule_id: str | None = item.get("code") or None
+            file_path: str = item.get("file", "")
+
+            location: Location | None = None
+            if file_path:
+                location = Location(
+                    file=file_path,
+                    start_line=item.get("line"),
+                    end_line=item.get("end_line"),
+                    start_column=item.get("column"),
+                    end_column=item.get("end_column"),
+                )
+
+            message = item.get("message", "")
+            if item.get("hint"):
+                message = f"{message} [{item['hint']}]"
+
             diagnostics.append(
                 ExternalDiagnostic(
                     id=str(uuid.uuid4()),
                     snapshot_id=snapshot.id,
                     analyzer=self.ANALYZER_ID,
-                    analyzer_version=self._version,
+                    analyzer_version=version,
                     rule_id=rule_id,
                     severity=severity,
                     message=message,
                     location=location,
-                    raw_diagnostic={"raw": raw_issue, "severity": severity_str},
+                    raw_diagnostic=item,
                 )
             )
-        return diagnostics
 
+        return diagnostics
 
 
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
 
-def _extract_issue_blocks(text: str) -> list[str]:
-    """Collapse each multi-line issue into a single normalized string.
-
-    flutter analyze wraps long messages across indented continuation lines.
-    Spinner/backspace characters from the animated progress display are
-    stripped before processing.
-    """
-    issues: list[str] = []
-    current: list[str] = []
-
-    for raw_line in text.splitlines():
-        line = _SPINNER_RE.sub("", raw_line).strip()
-
+def _parse_json_lines(text: str) -> list[dict[str, Any]]:
+    """Parse newline-delimited JSON objects from mypy stdout."""
+    results: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
         if not line:
-            if current:
-                issues.append(" ".join(current))
-                current = []
             continue
-
-        # Skip "Analyzing …" header and "N issues found." / "No issues found." footer
-        if line.startswith("Analyzing ") or re.search(r"issue(s)? found", line, re.I):
-            if current:
-                issues.append(" ".join(current))
-                current = []
-            continue
-
-        # A line whose first word is a known severity keyword starts a new issue
-        first_word = line.split()[0].lower().rstrip(_BULLET).rstrip(".")
-        if first_word in _SEVERITY_MAP:
-            if current:
-                issues.append(" ".join(current))
-            current = [line]
-        elif current:
-            # Continuation of the previous issue's wrapped message
-            current.append(line)
-
-    if current:
-        issues.append(" ".join(current))
-
-    return issues
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                results.append(obj)
+        except json.JSONDecodeError:
+            pass
+    return results
 
 
-def _parse_location(location_str: str) -> Location | None:
-    """Parse ``lib/foo/bar.dart:42:7`` into a ``Location``."""
-    m = _LOCATION_RE.match(location_str)
-    if not m:
-        return None
-    return Location(
-        file=m.group(1),
-        start_line=int(m.group(2)),
-        start_column=int(m.group(3)),
-    )
-
+def _has_python_files(project_path: str) -> bool:
+    """Return True if the directory contains at least one .py file."""
+    return any(Path(project_path).rglob("*.py"))

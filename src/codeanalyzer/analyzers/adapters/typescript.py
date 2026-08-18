@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from codeanalyzer.analyzers.adapters.base_stub import StubAnalyzerAdapter
+from codeanalyzer.domain.tooling import AcquisitionMode, CapabilityKind
 
 
 class TypeScriptAdapter(StubAnalyzerAdapter):
@@ -11,10 +12,11 @@ class TypeScriptAdapter(StubAnalyzerAdapter):
             analyzer_id="typescript",
             display_name="TypeScript Compiler",
             languages=["typescript"],
-            provides=[
-                "type diagnostics",
-                "compiler errors",
-                "declaration checks",
-            ],
+            capabilities={
+                CapabilityKind.DIAGNOSTICS: AcquisitionMode.LIBRARY_API,
+                CapabilityKind.TYPES: AcquisitionMode.LIBRARY_API,
+                CapabilityKind.SYMBOLS: AcquisitionMode.LIBRARY_API,
+                CapabilityKind.REFERENCES: AcquisitionMode.LIBRARY_API,
+            },
             binary_name="tsc",
         )
